@@ -40,6 +40,8 @@ def _fetch_endpoint(path, method="GET"):
             _cache[path] = (resp.status_code, dict(resp.headers), data)
         return True
     except Exception as e:
+        import traceback
+        traceback.print_exc()
         return False
 
 
@@ -466,6 +468,21 @@ async def cache_status(request: Request):
         else:
             status[path] = {"size": 0, "status": "none"}
     return JSONResponse({"kill_switch": kill_switch, "cache": status})
+
+
+@app.get("/dashboard/api/debug-fetch")
+async def debug_fetch(request: Request):
+    if not _is_admin(request):
+        raise HTTPException(401, "Unauthorized")
+    results = {}
+    for path, method in ENDPOINTS.items():
+        url = REAL_BASE + path
+        try:
+            resp = httpx.get(url, timeout=15, follow_redirects=True, verify=False)
+            results[path] = {"status": resp.status_code, "size": len(resp.content), "body_preview": resp.text[:200]}
+        except Exception as e:
+            results[path] = {"error": str(e)}
+    return JSONResponse(results)
 
 
 @app.api_route("/v1/telemetry", methods=["GET", "POST", "OPTIONS"])
