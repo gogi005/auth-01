@@ -243,26 +243,26 @@ async def license_activate(request: Request):
     return JSONResponse({"ok": True, "state": "pending"})
 
 
-async def _check_device(request: Request) -> bool:
+async def _check_device(request: Request) -> dict:
     if kill_switch:
-        return False
+        return {"ok": False, "reason": "kill_switch"}
     if db is None:
-        return False
+        return {"ok": True, "reason": "no_db"}
     client_ip = _get_client_ip(request)
     hwid = _session_get(client_ip)
-    if not hwid:
-        return False
-    device = await db.devices.find_one({"hwid": hwid})
-    if not device or device["status"] != "approved":
-        return False
-    if device.get("expires_at") and datetime.utcnow() > device["expires_at"]:
-        return False
-    return True
+    if hwid:
+        device = await db.devices.find_one({"hwid": hwid})
+        if device and device["status"] == "blocked":
+            return {"ok": False, "reason": "blocked"}
+        if device and device.get("expires_at") and datetime.utcnow() > device["expires_at"]:
+            return {"ok": False, "reason": "expired"}
+    return {"ok": True, "reason": "ok"}
 
 
 @app.get("/v1/modules")
 async def get_modules(request: Request):
-    if not await _check_device(request):
+    check = await _check_device(request)
+    if not check["ok"]:
         return JSONResponse({"modules": []})
     cached = _get_cached("/v1/modules")
     if cached:
@@ -272,7 +272,8 @@ async def get_modules(request: Request):
 
 @app.get("/v1/social-modules")
 async def get_social_modules(request: Request):
-    if not await _check_device(request):
+    check = await _check_device(request)
+    if not check["ok"]:
         return JSONResponse({"modules": []})
     cached = _get_cached("/v1/social-modules")
     if cached:
@@ -282,7 +283,8 @@ async def get_social_modules(request: Request):
 
 @app.get("/v1/checker-modules")
 async def get_checker_modules(request: Request):
-    if not await _check_device(request):
+    check = await _check_device(request)
+    if not check["ok"]:
         return JSONResponse({"modules": []})
     cached = _get_cached("/v1/checker-modules")
     if cached:
