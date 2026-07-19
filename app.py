@@ -29,6 +29,33 @@ ENDPOINTS = {
 }
 
 kill_switch = False
+_sessions = {}
+_sessions_lock = threading.Lock()
+
+
+def _session_set(ip, hwid):
+    with _sessions_lock:
+        _sessions[ip] = {"hwid": hwid, "ts": time.time()}
+
+
+def _session_get(ip):
+    with _sessions_lock:
+        s = _sessions.get(ip)
+        if s and time.time() - s["ts"] < 86400:
+            return s["hwid"]
+        if s:
+            del _sessions[ip]
+    return None
+
+
+def _get_client_ip(request: Request):
+    forwarded = request.headers.get("x-forwarded-for")
+    if forwarded:
+        return forwarded.split(",")[0].strip()
+    real_ip = request.headers.get("x-real-ip")
+    if real_ip:
+        return real_ip
+    return request.client.host if request.client else "unknown"
 
 
 def _fetch_endpoint(path, method="GET"):
@@ -183,6 +210,9 @@ async def license_validate(request: Request):
     if device["expires_at"]:
         remaining = (device["expires_at"] - datetime.utcnow()).total_seconds()
 
+    client_ip = _get_client_ip(request)
+    _session_set(client_ip, req_hwid)
+
     return JSONResponse({
         "ok": True, "state": "valid", "hwid": req_hwid, "hasKey": True,
         "expires_at": device["expires_at"].isoformat() if device["expires_at"] else None,
@@ -213,17 +243,26 @@ async def license_activate(request: Request):
     return JSONResponse({"ok": True, "state": "pending"})
 
 
-@app.get("/v1/modules")
-async def get_modules(request: Request):
-    hwid = request.query_params.get("hwid", "")
+async def _check_device(request: Request) -> bool:
     if kill_switch:
-        return JSONResponse({"modules": []})
-    if not hwid or db is None:
-        return JSONResponse({"modules": []})
+        return False
+    if db is None:
+        return False
+    client_ip = _get_client_ip(request)
+    hwid = _session_get(client_ip)
+    if not hwid:
+        return False
     device = await db.devices.find_one({"hwid": hwid})
     if not device or device["status"] != "approved":
-        return JSONResponse({"modules": []})
+        return False
     if device.get("expires_at") and datetime.utcnow() > device["expires_at"]:
+        return False
+    return True
+
+
+@app.get("/v1/modules")
+async def get_modules(request: Request):
+    if not await _check_device(request):
         return JSONResponse({"modules": []})
     cached = _get_cached("/v1/modules")
     if cached:
@@ -233,15 +272,7 @@ async def get_modules(request: Request):
 
 @app.get("/v1/social-modules")
 async def get_social_modules(request: Request):
-    hwid = request.query_params.get("hwid", "")
-    if kill_switch:
-        return JSONResponse({"modules": []})
-    if not hwid or db is None:
-        return JSONResponse({"modules": []})
-    device = await db.devices.find_one({"hwid": hwid})
-    if not device or device["status"] != "approved":
-        return JSONResponse({"modules": []})
-    if device.get("expires_at") and datetime.utcnow() > device["expires_at"]:
+    if not await _check_device(request):
         return JSONResponse({"modules": []})
     cached = _get_cached("/v1/social-modules")
     if cached:
@@ -251,15 +282,7 @@ async def get_social_modules(request: Request):
 
 @app.get("/v1/checker-modules")
 async def get_checker_modules(request: Request):
-    hwid = request.query_params.get("hwid", "")
-    if kill_switch:
-        return JSONResponse({"modules": []})
-    if not hwid or db is None:
-        return JSONResponse({"modules": []})
-    device = await db.devices.find_one({"hwid": hwid})
-    if not device or device["status"] != "approved":
-        return JSONResponse({"modules": []})
-    if device.get("expires_at") and datetime.utcnow() > device["expires_at"]:
+    if not await _check_device(request):
         return JSONResponse({"modules": []})
     cached = _get_cached("/v1/checker-modules")
     if cached:
