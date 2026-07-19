@@ -375,11 +375,6 @@ async def delete_device(request: Request, hwid: str = Form(...)):
     return RedirectResponse(url=f"/dashboard?pw={ADMIN_PASSWORD}", status_code=302)
 
 
-@app.get("/health")
-async def health():
-    return {"status": "ok", "time": datetime.utcnow().isoformat()}
-
-
 @app.api_route("/v1/telemetry", methods=["GET", "POST", "OPTIONS"])
 async def telemetry(request: Request):
     return JSONResponse({"ok": True})
@@ -400,9 +395,14 @@ async def extensions(path: str):
     return JSONResponse({"ok": True})
 
 
-@app.api_route("/{path:path}", methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"])
-async def catch_all(path: str, request: Request):
+@app.api_route("/v1/{path:path}", methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"])
+async def api_catch_all(path: str, request: Request):
     return JSONResponse({"ok": True})
+
+
+@app.get("/health")
+async def health():
+    return {"status": "ok", "time": datetime.utcnow().isoformat()}
 
 
 if __name__ == "__main__":
