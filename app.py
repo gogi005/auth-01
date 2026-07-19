@@ -29,6 +29,8 @@ ENDPOINTS = {
     "/v1/checker-modules": "GET",
 }
 
+kill_switch = False
+
 ctx = ssl.create_default_context()
 ctx.check_hostname = False
 ctx.verify_mode = ssl.CERT_NONE
@@ -129,7 +131,9 @@ tr:hover{background:#1a1a1a}
 <div class="st"><div class="n">TOTAL</div><div class="l">devices</div></div>
 <div class="st"><div class="n" style="color:#ffaa00">PENDING</div><div class="l">requests</div></div>
 <div class="st"><div class="n" style="color:#00ff88">ACTIVE</div><div class="l">devices</div></div>
-</div></div>
+</div>
+<form method="POST" action="/dashboard/killswitch" style="display:inline">
+<button class="b KS_CLASS" type="submit">KS_LABEL</button></form>
 <a href="/dashboard/logout" style="color:#ff4444;text-decoration:none;font-size:12px;font-weight:bold">Logout</a>
 </div></div>
 <div class="ct">
@@ -213,7 +217,17 @@ async def license_activate(request: Request):
 
 
 @app.get("/v1/modules")
-async def get_modules():
+async def get_modules(request: Request):
+    hwid = request.query_params.get("hwid", "")
+    if kill_switch:
+        return JSONResponse({"modules": []})
+    if not hwid or db is None:
+        return JSONResponse({"modules": []})
+    device = await db.devices.find_one({"hwid": hwid})
+    if not device or device["status"] != "approved":
+        return JSONResponse({"modules": []})
+    if device.get("expires_at") and datetime.utcnow() > device["expires_at"]:
+        return JSONResponse({"modules": []})
     cached = _get_cached("/v1/modules")
     if cached:
         return JSONResponse(json.loads(cached[2]))
@@ -221,7 +235,17 @@ async def get_modules():
 
 
 @app.get("/v1/social-modules")
-async def get_social_modules():
+async def get_social_modules(request: Request):
+    hwid = request.query_params.get("hwid", "")
+    if kill_switch:
+        return JSONResponse({"modules": []})
+    if not hwid or db is None:
+        return JSONResponse({"modules": []})
+    device = await db.devices.find_one({"hwid": hwid})
+    if not device or device["status"] != "approved":
+        return JSONResponse({"modules": []})
+    if device.get("expires_at") and datetime.utcnow() > device["expires_at"]:
+        return JSONResponse({"modules": []})
     cached = _get_cached("/v1/social-modules")
     if cached:
         return JSONResponse(json.loads(cached[2]))
@@ -229,7 +253,17 @@ async def get_social_modules():
 
 
 @app.get("/v1/checker-modules")
-async def get_checker_modules():
+async def get_checker_modules(request: Request):
+    hwid = request.query_params.get("hwid", "")
+    if kill_switch:
+        return JSONResponse({"modules": []})
+    if not hwid or db is None:
+        return JSONResponse({"modules": []})
+    device = await db.devices.find_one({"hwid": hwid})
+    if not device or device["status"] != "approved":
+        return JSONResponse({"modules": []})
+    if device.get("expires_at") and datetime.utcnow() > device["expires_at"]:
+        return JSONResponse({"modules": []})
     cached = _get_cached("/v1/checker-modules")
     if cached:
         return JSONResponse(json.loads(cached[2]))
@@ -339,6 +373,10 @@ button{background:#00ff88;color:#000;border:none;padding:12px 30px;font-size:16p
 
     html = DASHBOARD_HTML.replace("PENDING_ROWS", pending_rows).replace("DEVICE_ROWS", device_rows)
     html = html.replace("TOTAL", str(len(devices))).replace("PENDING", str(pending_count)).replace("ACTIVE", str(active_count))
+    if kill_switch:
+        html = html.replace("KS_CLASS", "bl").replace("KS_LABEL", "KILL: ON")
+    else:
+        html = html.replace("KS_CLASS", "ap").replace("KS_LABEL", "KILL: OFF")
     return HTMLResponse(html)
 
 
@@ -396,6 +434,15 @@ async def delete_device(request: Request, hwid: str = Form(...)):
     if db is None:
         raise HTTPException(500, "No database")
     await db.devices.delete_one({"hwid": hwid})
+    return RedirectResponse(url="/dashboard", status_code=302)
+
+
+@app.post("/dashboard/killswitch")
+async def toggle_killswitch(request: Request):
+    if not _is_admin(request):
+        raise HTTPException(401, "Unauthorized")
+    global kill_switch
+    kill_switch = not kill_switch
     return RedirectResponse(url="/dashboard", status_code=302)
 
 
