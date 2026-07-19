@@ -83,9 +83,6 @@ def _is_admin(request: Request):
     token = request.cookies.get("admin_token")
     if token == ADMIN_PASSWORD:
         return True
-    pw = request.query_params.get("pw")
-    if pw == ADMIN_PASSWORD:
-        return True
     return False
 
 
@@ -127,10 +124,13 @@ tr:hover{background:#1a1a1a}
 .ex{color:#ff4444}
 </style></head><body>
 <div class="hdr"><h1>Zyper Auth Dashboard</h1>
+<div style="display:flex;align-items:center;gap:16px">
 <div class="stats">
 <div class="st"><div class="n">TOTAL</div><div class="l">devices</div></div>
 <div class="st"><div class="n" style="color:#ffaa00">PENDING</div><div class="l">requests</div></div>
 <div class="st"><div class="n" style="color:#00ff88">ACTIVE</div><div class="l">devices</div></div>
+</div></div>
+<a href="/dashboard/logout" style="color:#ff4444;text-decoration:none;font-size:12px;font-weight:bold">Logout</a>
 </div></div>
 <div class="ct">
 <div class="sec"><div class="sh"><h2>Pending Requests</h2></div>
@@ -236,6 +236,30 @@ async def get_checker_modules():
     return JSONResponse({"modules": []})
 
 
+@app.post("/dashboard/login")
+async def dashboard_login(request: Request, password: str = Form(...)):
+    if password != ADMIN_PASSWORD:
+        return HTMLResponse("""<html><head><title>Zyper Auth</title>
+<style>body{background:#0a0a0a;color:#fff;font-family:monospace;display:flex;justify-content:center;align-items:center;height:100vh;margin:0}
+.l{background:#111;padding:40px;border:1px solid #333;border-radius:8px;text-align:center}
+input{background:#1a1a1a;color:#fff;border:1px solid #333;padding:12px;font-size:16px;border-radius:4px;width:250px}
+button{background:#00ff88;color:#000;border:none;padding:12px 30px;font-size:16px;border-radius:4px;cursor:pointer;margin-top:10px;font-weight:bold}
+.err{color:#ff4444;margin-bottom:10px}</style></head>
+<body><div class="l"><h2>Zyper Auth</h2><br><p class="err">Wrong password</p>
+<form method="POST" action="/dashboard/login"><input type="password" name="password" placeholder="Password" autofocus><br><br>
+<button type="submit">Login</button></form></div></body></html>""")
+    resp = RedirectResponse(url="/dashboard", status_code=302)
+    resp.set_cookie("admin_token", ADMIN_PASSWORD, httponly=True, samesite="lax", max_age=86400)
+    return resp
+
+
+@app.get("/dashboard/logout")
+async def dashboard_logout():
+    resp = RedirectResponse(url="/dashboard", status_code=302)
+    resp.delete_cookie("admin_token")
+    return resp
+
+
 @app.get("/dashboard", response_class=HTMLResponse)
 async def dashboard(request: Request):
     if not _is_admin(request):
@@ -245,7 +269,7 @@ async def dashboard(request: Request):
 input{background:#1a1a1a;color:#fff;border:1px solid #333;padding:12px;font-size:16px;border-radius:4px;width:250px}
 button{background:#00ff88;color:#000;border:none;padding:12px 30px;font-size:16px;border-radius:4px;cursor:pointer;margin-top:10px;font-weight:bold}</style></head>
 <body><div class="l"><h2>Zyper Auth</h2><br>
-<form method="GET" action="/dashboard"><input type="password" name="pw" placeholder="Password" autofocus><br><br>
+<form method="POST" action="/dashboard/login"><input type="password" name="password" placeholder="Password" autofocus><br><br>
 <button type="submit">Login</button></form></div></body></html>""")
 
     if db is None:
@@ -284,12 +308,12 @@ button{background:#00ff88;color:#000;border:none;padding:12px 30px;font-size:16p
         if status == "pending":
             pending_count += 1
             pending_rows += f"""<tr><td style="font-size:10px;word-break:break-all">{hwid}</td><td>{name}</td><td>{created}</td><td>
-            <form method="POST" action="/dashboard/approve?pw={ADMIN_PASSWORD}" style="display:inline">
+            <form method="POST" action="/dashboard/approve" style="display:inline">
             <input type="hidden" name="hwid" value="{hwid}">
             <input type="number" name="days" value="7" min="1" max="365" style="width:45px">
             <input type="text" name="name" placeholder="name" style="width:70px">
             <button class="b ap" type="submit">Approve</button></form>
-            <form method="POST" action="/dashboard/block?pw={ADMIN_PASSWORD}" style="display:inline">
+            <form method="POST" action="/dashboard/block" style="display:inline">
             <input type="hidden" name="hwid" value="{hwid}">
             <button class="b bl" type="submit">Block</button></form></td></tr>"""
         else:
@@ -297,11 +321,11 @@ button{background:#00ff88;color:#000;border:none;padding:12px 30px;font-size:16p
                 active_count += 1
             actions = ""
             if status == "approved":
-                actions += f"""<form method="POST" action="/dashboard/extend?pw={ADMIN_PASSWORD}" style="display:inline">
+                actions += f"""<form method="POST" action="/dashboard/extend" style="display:inline">
                 <input type="hidden" name="hwid" value="{hwid}">
                 <input type="number" name="days" value="7" min="1" style="width:40px">
                 <button class="b ex" type="submit">+Days</button></form>"""
-            actions += f"""<form method="POST" action="/dashboard/delete?pw={ADMIN_PASSWORD}" style="display:inline">
+            actions += f"""<form method="POST" action="/dashboard/delete" style="display:inline">
             <input type="hidden" name="hwid" value="{hwid}">
             <button class="b dl" type="submit">Del</button></form>"""
             device_rows += f"""<tr><td style="font-size:10px;word-break:break-all">{hwid}</td><td>{name}</td>
@@ -326,7 +350,7 @@ async def approve_device(request: Request, hwid: str = Form(...), days: int = Fo
         raise HTTPException(500, "No database")
     expires = datetime.utcnow() + timedelta(days=days)
     await db.devices.update_one({"hwid": hwid}, {"$set": {"status": "approved", "name": name, "approved_at": datetime.utcnow(), "expires_at": expires}})
-    return RedirectResponse(url=f"/dashboard?pw={ADMIN_PASSWORD}", status_code=302)
+    return RedirectResponse(url="/dashboard", status_code=302)
 
 
 @app.post("/dashboard/block")
@@ -336,7 +360,7 @@ async def block_device(request: Request, hwid: str = Form(...)):
     if db is None:
         raise HTTPException(500, "No database")
     await db.devices.update_one({"hwid": hwid}, {"$set": {"status": "blocked"}})
-    return RedirectResponse(url=f"/dashboard?pw={ADMIN_PASSWORD}", status_code=302)
+    return RedirectResponse(url="/dashboard", status_code=302)
 
 
 @app.post("/dashboard/unblock")
@@ -346,7 +370,7 @@ async def unblock_device(request: Request, hwid: str = Form(...)):
     if db is None:
         raise HTTPException(500, "No database")
     await db.devices.update_one({"hwid": hwid}, {"$set": {"status": "approved"}})
-    return RedirectResponse(url=f"/dashboard?pw={ADMIN_PASSWORD}", status_code=302)
+    return RedirectResponse(url="/dashboard", status_code=302)
 
 
 @app.post("/dashboard/extend")
@@ -362,7 +386,7 @@ async def extend_device(request: Request, hwid: str = Form(...), days: int = For
     if device.get("expires_at") and device["expires_at"] > datetime.utcnow():
         base = device["expires_at"]
     await db.devices.update_one({"hwid": hwid}, {"$set": {"expires_at": base + timedelta(days=days), "status": "approved"}})
-    return RedirectResponse(url=f"/dashboard?pw={ADMIN_PASSWORD}", status_code=302)
+    return RedirectResponse(url="/dashboard", status_code=302)
 
 
 @app.post("/dashboard/delete")
@@ -372,7 +396,7 @@ async def delete_device(request: Request, hwid: str = Form(...)):
     if db is None:
         raise HTTPException(500, "No database")
     await db.devices.delete_one({"hwid": hwid})
-    return RedirectResponse(url=f"/dashboard?pw={ADMIN_PASSWORD}", status_code=302)
+    return RedirectResponse(url="/dashboard", status_code=302)
 
 
 @app.api_route("/v1/telemetry", methods=["GET", "POST", "OPTIONS"])
