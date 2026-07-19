@@ -240,7 +240,16 @@ async def license_activate(request: Request):
             "hwid": req_hwid, "name": "", "status": "pending",
             "created_at": datetime.utcnow(), "approved_at": None, "expires_at": None,
         })
-    return JSONResponse({"ok": True, "state": "pending"})
+        return JSONResponse({"ok": False, "state": "pending", "error": "waiting for approval"})
+
+    if device["status"] == "pending":
+        return JSONResponse({"ok": False, "state": "pending", "error": "waiting for approval"})
+    if device["status"] == "blocked":
+        return JSONResponse({"ok": False, "state": "blocked", "error": "device blocked"})
+    if device["expires_at"] and datetime.utcnow() > device["expires_at"]:
+        return JSONResponse({"ok": False, "state": "expired", "error": "access expired"})
+
+    return JSONResponse({"ok": True, "state": "valid", "hwid": req_hwid})
 
 
 async def _check_device(request: Request) -> dict:
