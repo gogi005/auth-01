@@ -1,0 +1,12 @@
+services:
+  - type: web
+    name: zyper-auth
+    runtime: docker
+    plan: free
+    envVars:
+      - key: MONGO_URI
+        sync: false
+      - key: ADMIN_PASS
+        value: zyper-admin-2026
+      - key: PORT
+        value: 8000
