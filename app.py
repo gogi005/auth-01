@@ -83,7 +83,7 @@ def _is_admin(request: Request):
     token = request.cookies.get("admin_token")
     if token == ADMIN_PASSWORD:
         return True
-    pw = request.query.get("pw")
+    pw = request.query_params.get("pw")
     if pw == ADMIN_PASSWORD:
         return True
     return False
