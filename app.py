@@ -1,9 +1,8 @@
 import os
 import json
-import ssl
 import time
 import threading
-import urllib.request
+import httpx
 from datetime import datetime, timedelta
 from contextlib import asynccontextmanager
 
@@ -31,22 +30,16 @@ ENDPOINTS = {
 
 kill_switch = False
 
-ctx = ssl.create_default_context()
-ctx.check_hostname = False
-ctx.verify_mode = ssl.CERT_NONE
-
 
 def _fetch_endpoint(path, method="GET"):
     try:
         url = REAL_BASE + path
-        req = urllib.request.Request(url, method=method)
-        req.add_header("Accept-Encoding", "identity")
-        with urllib.request.urlopen(req, timeout=15, context=ctx) as resp:
-            data = resp.read()
-            with _cache_lock:
-                _cache[path] = (resp.status, dict(resp.headers), data)
-            return True
-    except Exception:
+        resp = httpx.get(url, timeout=15, follow_redirects=True, verify=False)
+        data = resp.content
+        with _cache_lock:
+            _cache[path] = (resp.status_code, dict(resp.headers), data)
+        return True
+    except Exception as e:
         return False
 
 
