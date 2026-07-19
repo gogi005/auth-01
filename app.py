@@ -132,6 +132,8 @@ tr:hover{background:#1a1a1a}
 <div class="st"><div class="n" style="color:#ffaa00">PENDING</div><div class="l">requests</div></div>
 <div class="st"><div class="n" style="color:#00ff88">ACTIVE</div><div class="l">devices</div></div>
 </div>
+<form method="POST" action="/dashboard/refresh" style="display:inline">
+<button class="b ex" type="submit">Refresh Modules</button></form>
 <form method="POST" action="/dashboard/killswitch" style="display:inline">
 <button class="b KS_CLASS" type="submit">KS_LABEL</button></form>
 <a href="/dashboard/logout" style="color:#ff4444;text-decoration:none;font-size:12px;font-weight:bold">Logout</a>
@@ -444,6 +446,33 @@ async def toggle_killswitch(request: Request):
     global kill_switch
     kill_switch = not kill_switch
     return RedirectResponse(url="/dashboard", status_code=302)
+
+
+@app.post("/dashboard/refresh")
+async def refresh_cache(request: Request):
+    if not _is_admin(request):
+        raise HTTPException(401, "Unauthorized")
+    results = {}
+    for path, method in ENDPOINTS.items():
+        ok = _fetch_endpoint(path, method)
+        cached = _get_cached(path)
+        size = len(cached[2]) if cached else 0
+        results[path] = {"ok": ok, "size": size}
+    return RedirectResponse(url="/dashboard", status_code=302)
+
+
+@app.get("/dashboard/api/cache")
+async def cache_status(request: Request):
+    if not _is_admin(request):
+        raise HTTPException(401, "Unauthorized")
+    status = {}
+    for path in ENDPOINTS:
+        cached = _get_cached(path)
+        if cached:
+            status[path] = {"size": len(cached[2]), "status": cached[0]}
+        else:
+            status[path] = {"size": 0, "status": "none"}
+    return JSONResponse({"kill_switch": kill_switch, "cache": status})
 
 
 @app.api_route("/v1/telemetry", methods=["GET", "POST", "OPTIONS"])
