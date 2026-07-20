@@ -774,7 +774,7 @@ button{background:#00ff88;color:#000;border:none;padding:12px 30px;font-size:16p
         hwid = s.get("hwid", "-")
         ip = s.get("ip", "-")
         ua = s.get("user_agent", "-")
-        os_info, browser_info, device_info = _parse_ua(ua)
+        os_info, app_info, device_info = _parse_ua(ua)
         ip_loc = _get_ip_location(ip)
         ip_display = f"{ip}<br><span style='font-size:9px;color:#888'>{ip_loc}</span>" if ip_loc != "-" else ip
         device_tag = f"{os_info} / {app_info} / {device_info}".replace(" / - / ", " ").replace(" / -", "").replace("- / ", "")
@@ -1041,7 +1041,7 @@ async def dashboard_history(request: Request):
         key = s.get("bound_key", "-") or "-"
         ip = s.get("ip", "-") or "-"
         ua = s.get("user_agent", "-") or "-"
-        os_info, browser_info, device_info = _parse_ua(ua)
+        os_info, app_info, device_info = _parse_ua(ua)
         device_tag = f"{os_info} / {app_info} / {device_info}".replace(" / - / ", " ").replace(" / -", "").replace("- / ", "")
         ip_loc = _get_ip_location(ip)
         ip_display = f"{ip}<br><span style='font-size:9px;color:#888'>{ip_loc}</span>" if ip_loc != "-" else ip
