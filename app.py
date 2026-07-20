@@ -146,13 +146,12 @@ async def license_validate(request: Request):
         if key_doc.get("expires_at") and datetime.utcnow() > key_doc["expires_at"]:
             return JSONResponse({"ok": False, "state": "invalid", "error": "key expired"})
 
+        existing_session = await db.sessions.find_one({"hwid": req_hwid})
+        if existing_session and not existing_session.get("active", True):
+            return JSONResponse({"ok": False, "state": "invalid", "error": "device kicked by admin"})
+
         max_devices = key_doc.get("max_devices", 1)
-        using_devices = await db.keys.count_documents({
-            "key": req_key,
-            "active": True,
-            "hwid": {"$ne": req_hwid}
-        })
-        bound_hwids = await db.sessions.distinct("hwid", {"bound_key": req_key})
+        bound_hwids = await db.sessions.distinct("hwid", {"bound_key": req_key, "active": True})
         if req_hwid not in bound_hwids and len(bound_hwids) >= max_devices:
             return JSONResponse({"ok": False, "state": "invalid", "error": "max devices reached"})
 
@@ -182,6 +181,9 @@ async def license_validate(request: Request):
 
     session = await db.sessions.find_one({"hwid": req_hwid})
     if session and session.get("bound_key"):
+        if not session.get("active", True):
+            return JSONResponse({"ok": False, "state": "invalid", "error": "device kicked by admin"})
+
         bound_key = await db.keys.find_one({"key": session["bound_key"]})
         if bound_key and not bound_key.get("disabled"):
             if bound_key.get("expires_at") and datetime.utcnow() > bound_key["expires_at"]:
@@ -348,6 +350,11 @@ async def extensions(path: str):
 @app.api_route("/v1/{path:path}", methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"])
 async def api_catch_all(path: str, request: Request):
     return JSONResponse({"ok": True})
+
+
+@app.get("/")
+async def root_redirect():
+    return RedirectResponse(url="https://t.me/Fetuseater005", status_code=302)
 
 
 @app.get("/health")
@@ -521,6 +528,7 @@ button{background:#00ff88;color:#000;border:none;padding:12px 30px;font-size:16p
         <td style="font-size:10px">{key_note or '-'}</td>
         <td>
         <form method="POST" action="/dashboard/kick" style="display:inline"><input type="hidden" name="hwid" value="{s.get('hwid','')}"><button class="b bl" type="submit">Kick</button></form>
+        <form method="POST" action="/dashboard/unkick" style="display:inline"><input type="hidden" name="hwid" value="{s.get('hwid','')}"><button class="b grn" type="submit">Unkick</button></form>
         </td></tr>"""
 
     if not user_rows:
@@ -595,6 +603,16 @@ async def kick_user(request: Request, hwid: str = Form(...)):
     if db is None:
         raise HTTPException(500, "No database")
     await db.sessions.update_one({"hwid": hwid}, {"$set": {"active": False}})
+    return RedirectResponse(url="/dashboard", status_code=302)
+
+
+@app.post("/dashboard/unkick")
+async def unkick_user(request: Request, hwid: str = Form(...)):
+    if not _is_admin(request):
+        raise HTTPException(401, "Unauthorized")
+    if db is None:
+        raise HTTPException(500, "No database")
+    await db.sessions.update_one({"hwid": hwid}, {"$set": {"active": True}})
     return RedirectResponse(url="/dashboard", status_code=302)
 
 
