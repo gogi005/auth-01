@@ -368,20 +368,12 @@ async def license_validate(request: Request):
             await _log_audit("validate", req_hwid, req_key, client_ip, user_agent, False, "max devices")
             return JSONResponse({"ok": False, "state": "invalid", "error": "max devices reached"})
 
-        await db.sessions.update_one(
-            {"hwid": req_hwid},
-            {"$set": {
-                "hwid": req_hwid,
-                "ip": client_ip,
-                "user_agent": user_agent,
-                "bound_key": req_key,
-                "last_seen": datetime.utcnow(),
-                "active": True,
-                "first_seen": datetime.utcnow(),
-            },
-            "$setOnInsert": {"created_at": datetime.utcnow()}},
-            upsert=True,
-        )
+        existing = await db.sessions.find_one({"hwid": req_hwid})
+        if existing:
+            await db.sessions.update_one(
+                {"hwid": req_hwid},
+                {"$set": {"last_seen": datetime.utcnow(), "ip": client_ip, "user_agent": user_agent}}
+            )
 
         _record_attempt(client_ip, True)
         await _log_audit("validate", req_hwid, req_key, client_ip, user_agent, True, "ok")
@@ -480,7 +472,7 @@ async def license_activate(request: Request):
         return JSONResponse({"ok": False, "state": "invalid", "error": "device kicked by admin"})
 
     max_devices = key_doc.get("max_devices", 1)
-    bound_hwids = await db.sessions.distinct("hwid", {"bound_key": req_key})
+    bound_hwids = await db.sessions.distinct("hwid", {"bound_key": req_key, "active": True})
     if req_hwid not in bound_hwids and len(bound_hwids) >= max_devices:
         _record_attempt(client_ip, False)
         await _log_audit("activate", req_hwid, req_key, client_ip, user_agent, False, "max devices")
