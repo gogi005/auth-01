@@ -77,6 +77,75 @@ def _unblock_ip(ip):
     _blocked_ips.pop(ip, None)
     _rate_limit.pop(ip, None)
 
+def _parse_ua(ua):
+    if not ua or ua == "-":
+        return "-", "-", "-"
+    ua = str(ua)
+    os_info = "-"
+    browser_info = "-"
+    device_info = "-"
+    if "Chrome/" in ua and "Edg/" not in ua and "OPR/" not in ua:
+        m = __import__("re").search(r"Chrome/([\d.]+)", ua)
+        browser_info = f"Chrome {m.group(1)}" if m else "Chrome"
+    elif "Edg/" in ua:
+        m = __import__("re").search(r"Edg/([\d.]+)", ua)
+        browser_info = f"Edge {m.group(1)}" if m else "Edge"
+    elif "Firefox/" in ua:
+        m = __import__("re").search(r"Firefox/([\d.]+)", ua)
+        browser_info = f"Firefox {m.group(1)}" if m else "Firefox"
+    elif "OPR/" in ua or "Opera/" in ua:
+        browser_info = "Opera"
+    elif "Safari/" in ua and "Chrome" not in ua:
+        m = __import__("re").search(r"Version/([\d.]+)", ua)
+        browser_info = f"Safari {m.group(1)}" if m else "Safari"
+    if "Windows NT 10" in ua:
+        os_info = "Windows 10"
+    elif "Windows NT 11" in ua:
+        os_info = "Windows 11"
+    elif "Windows NT 6.3" in ua:
+        os_info = "Windows 8.1"
+    elif "Windows NT 6.1" in ua:
+        os_info = "Windows 7"
+    elif "Mac OS X" in ua:
+        m = __import__("re").search(r"Mac OS X ([\d_]+)", ua)
+        os_info = f"macOS {m.group(1).replace('_','.')}" if m else "macOS"
+    elif "Android" in ua:
+        m = __import__("re").search(r"Android ([\d.]+)", ua)
+        os_info = f"Android {m.group(1)}" if m else "Android"
+    elif "iPhone" in ua or "iPad" in ua:
+        m = __import__("re").search(r"iPhone OS ([\d_]+)", ua)
+        os_info = f"iOS {m.group(1).replace('_','.')}" if m else "iOS"
+    elif "Linux" in ua:
+        os_info = "Linux"
+    if "iPhone" in ua:
+        device_info = "iPhone"
+    elif "iPad" in ua:
+        device_info = "iPad"
+    elif "SM-" in ua:
+        m = __import__("re").search(r"SM-([A-Za-z0-9]+)", ua)
+        device_info = f"Samsung {m.group(1)}" if m else "Samsung"
+    elif "Pixel" in ua:
+        m = __import__("re").search(r"Pixel [\d]+", ua)
+        device_info = m.group(0) if m else "Google Pixel"
+    elif "MI" in ua or "Redmi" in ua or "Xiaomi" in ua:
+        device_info = "Xiaomi"
+    elif "OPPO" in ua or "CPH" in ua:
+        device_info = "OPPO"
+    elif "vivo" in ua or "V" in ua:
+        m = __import__("re").search(r"V\d{4}", ua)
+        device_info = f"vivo {m.group(0)}" if m else "vivo"
+    elif "OnePlus" in ua:
+        device_info = "OnePlus"
+    elif "Macintosh" in ua:
+        device_info = "Mac"
+    elif "Windows" in ua:
+        device_info = "PC"
+    elif "Linux" in ua and "Android" not in ua:
+        device_info = "Linux PC"
+    elif "httpx" in ua or "python-requests" in ua or "curl" in ua or "wget" in ua:
+        device_info = "Script/API"
+    return os_info, browser_info, device_info
+
 async def _log_audit(action, hwid, key, ip, user_agent, success, reason=""):
     if db is None:
         return
@@ -557,7 +626,7 @@ NEW_KEYS
 </div>
 
 <div class="sec"><div class="sh"><h2>Active Users</h2><input class="sbar" id="userSearch" placeholder="Search users..." oninput="filterTable('userSearch','userTable')"></div>
-<table id="userTable"><tr><th>HWID</th><th>Key</th><th>IP</th><th>User Agent</th><th>First Seen</th><th>Last Seen</th><th>Note</th><th>Status</th><th>Actions</th></tr>
+<table id="userTable"><tr><th>HWID</th><th>Key</th><th>IP</th><th>Device</th><th>User Agent</th><th>First Seen</th><th>Last Seen</th><th>Note</th><th>Status</th><th>Actions</th></tr>
 USER_ROWS
 </table></div>
 
@@ -657,8 +726,8 @@ button{background:#00ff88;color:#000;border:none;padding:12px 30px;font-size:16p
         hwid = s.get("hwid", "-")
         ip = s.get("ip", "-")
         ua = s.get("user_agent", "-")
-        if len(ua) > 50:
-            ua = ua[:50] + "..."
+        os_info, browser_info, device_info = _parse_ua(ua)
+        device_tag = f"{os_info} / {browser_info} / {device_info}".replace(" / - / ", " ").replace(" / -", "").replace("- / ", "")
         first = s["first_seen"].strftime("%d %b %H:%M") if s.get("first_seen") else "-"
         last = s["last_seen"].strftime("%d %b %H:%M") if s.get("last_seen") else "-"
         key_note = ""
@@ -671,6 +740,7 @@ button{background:#00ff88;color:#000;border:none;padding:12px 30px;font-size:16p
         <td style="font-size:10px;word-break:break-all">{hwid}</td>
         <td class="kc" style="font-size:10px">{key}</td>
         <td>{ip}</td>
+        <td style="font-size:10px" title="{ua}">{device_tag}</td>
         <td style="font-size:9px;max-width:200px;overflow:hidden;text-overflow:ellipsis">{ua}</td>
         <td class="ts">{first}</td><td class="ts">{last}</td>
         <td style="font-size:10px">{key_note or '-'}</td>
@@ -681,7 +751,7 @@ button{background:#00ff88;color:#000;border:none;padding:12px 30px;font-size:16p
         </td></tr>"""
 
     if not user_rows:
-        user_rows = '<tr><td colspan="9" style="text-align:center;color:#555;padding:16px">No users yet</td></tr>'
+        user_rows = '<tr><td colspan="10" style="text-align:center;color:#555;padding:16px">No users yet</td></tr>'
 
     blocked = _get_blocked_ips()
     blocked_rows = ""
@@ -865,7 +935,7 @@ AUDIT_ROWS
 </table></div>
 
 <div class="sec"><div class="sh"><h2>All Past Users (with bound keys)</h2><input class="sb" id="pastSearch" placeholder="Search..." oninput="filterTable('pastSearch','pastTable')"></div>
-<table id="pastTable"><tr><th>HWID</th><th>Key</th><th>IP</th><th>User Agent</th><th>First Seen</th><th>Last Seen</th><th>Status</th></tr>
+<table id="pastTable"><tr><th>HWID</th><th>Key</th><th>IP</th><th>Device</th><th>User Agent</th><th>First Seen</th><th>Last Seen</th><th>Status</th></tr>
 PAST_ROWS
 </table></div>
 
@@ -918,7 +988,9 @@ async def dashboard_history(request: Request):
         hwid = s.get("hwid", "-") or "-"
         key = s.get("bound_key", "-") or "-"
         ip = s.get("ip", "-") or "-"
-        ua = (s.get("user_agent", "-") or "-")[:50]
+        ua = s.get("user_agent", "-") or "-"
+        os_info, browser_info, device_info = _parse_ua(ua)
+        device_tag = f"{os_info} / {browser_info} / {device_info}".replace(" / - / ", " ").replace(" / -", "").replace("- / ", "")
         first = s["first_seen"].strftime("%d %b %H:%M") if s.get("first_seen") else "-"
         last = s["last_seen"].strftime("%d %b %H:%M") if s.get("last_seen") else "-"
         status_cls = "active" if active else "kicked"
@@ -927,12 +999,13 @@ async def dashboard_history(request: Request):
         <td style="font-size:10px">{hwid}</td>
         <td style="font-size:10px;color:#00ff88">{key}</td>
         <td>{ip}</td>
-        <td style="font-size:9px">{ua}</td>
+        <td style="font-size:10px" title="{ua}">{device_tag}</td>
+        <td style="font-size:9px;max-width:200px;overflow:hidden;text-overflow:ellipsis">{ua}</td>
         <td class="ts">{first}</td><td class="ts">{last}</td>
         <td><span class="s {status_cls}">{status_txt}</span></td></tr>"""
 
     if not past_rows:
-        past_rows = '<tr><td colspan="7" style="text-align:center;color:#555;padding:16px">No past users</td></tr>'
+        past_rows = '<tr><td colspan="8" style="text-align:center;color:#555;padding:16px">No past users</td></tr>'
 
     html = HISTORY_HTML.replace("AUDIT_ROWS", audit_rows).replace("PAST_ROWS", past_rows)
     return HTMLResponse(html)
