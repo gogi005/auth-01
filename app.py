@@ -243,6 +243,10 @@ async def license_activate(request: Request):
     if key_doc.get("expires_at") and datetime.utcnow() > key_doc["expires_at"]:
         return JSONResponse({"ok": False, "state": "invalid", "error": "key expired"})
 
+    existing_session = await db.sessions.find_one({"hwid": req_hwid})
+    if existing_session and not existing_session.get("active", True):
+        return JSONResponse({"ok": False, "state": "invalid", "error": "device kicked by admin"})
+
     max_devices = key_doc.get("max_devices", 1)
     bound_hwids = await db.sessions.distinct("hwid", {"bound_key": req_key})
     if req_hwid not in bound_hwids and len(bound_hwids) >= max_devices:
