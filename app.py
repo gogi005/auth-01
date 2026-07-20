@@ -34,6 +34,8 @@ kill_switch = False
 
 # Rate limiting
 _rate_limit = defaultdict(list)
+_ip_cache = {}
+_geo_lock = threading.Lock()
 RATE_LIMIT_MAX = 5
 RATE_LIMIT_WINDOW = 60
 RATE_LIMIT_BLOCK = 300
@@ -77,27 +79,70 @@ def _unblock_ip(ip):
     _blocked_ips.pop(ip, None)
     _rate_limit.pop(ip, None)
 
+def _get_ip_location(ip):
+    if not ip or ip in ("127.0.0.1", "::1", "localhost", "unknown"):
+        return "-"
+    with _geo_lock:
+        cached = _ip_cache.get(ip)
+        if cached and time.time() - cached["ts"] < 3600:
+            return cached["loc"]
+    try:
+        r = __import__("httpx").get(f"http://ip-api.com/json/{ip}?fields=city,country,query", timeout=5)
+        data = r.json()
+        if data.get("city") and data.get("country"):
+            loc = f"{data['city']}, {data['country']}"
+        elif data.get("country"):
+            loc = data["country"]
+        else:
+            loc = "-"
+        with _geo_lock:
+            _ip_cache[ip] = {"loc": loc, "ts": time.time()}
+        return loc
+    except Exception:
+        return "-"
+
 def _parse_ua(ua):
     if not ua or ua == "-":
         return "-", "-", "-"
     ua = str(ua)
     os_info = "-"
-    browser_info = "-"
+    app_info = "-"
     device_info = "-"
-    if "Chrome/" in ua and "Edg/" not in ua and "OPR/" not in ua:
-        m = __import__("re").search(r"Chrome/([\d.]+)", ua)
-        browser_info = f"Chrome {m.group(1)}" if m else "Chrome"
-    elif "Edg/" in ua:
-        m = __import__("re").search(r"Edg/([\d.]+)", ua)
-        browser_info = f"Edge {m.group(1)}" if m else "Edge"
-    elif "Firefox/" in ua:
-        m = __import__("re").search(r"Firefox/([\d.]+)", ua)
-        browser_info = f"Firefox {m.group(1)}" if m else "Firefox"
-    elif "OPR/" in ua or "Opera/" in ua:
-        browser_info = "Opera"
-    elif "Safari/" in ua and "Chrome" not in ua:
-        m = __import__("re").search(r"Version/([\d.]+)", ua)
-        browser_info = f"Safari {m.group(1)}" if m else "Safari"
+
+    # App detection (Wails desktop apps)
+    if "ZyperDesktop" in ua or "Wails" in ua:
+        app_info = "Zyper Desktop"
+    elif "httpx" in ua or "python-requests" in ua or "python-httpx" in ua:
+        app_info = "Python Script"
+    elif "curl" in ua:
+        app_info = "cURL"
+    elif "wget" in ua:
+        app_info = "wget"
+    elif "Go-http-client" in ua:
+        app_info = "Go HTTP"
+    elif "Postman" in ua:
+        app_info = "Postman"
+    elif "axios" in ua:
+        app_info = "Axios/JS"
+
+    # Browser detection (only if not an app)
+    if app_info == "-":
+        if "Chrome/" in ua and "Edg/" not in ua and "OPR/" not in ua:
+            m = __import__("re").search(r"Chrome/([\d.]+)", ua)
+            app_info = f"Chrome {m.group(1)}" if m else "Chrome"
+        elif "Edg/" in ua:
+            m = __import__("re").search(r"Edg/([\d.]+)", ua)
+            app_info = f"Edge {m.group(1)}" if m else "Edge"
+        elif "Firefox/" in ua:
+            m = __import__("re").search(r"Firefox/([\d.]+)", ua)
+            app_info = f"Firefox {m.group(1)}" if m else "Firefox"
+        elif "OPR/" in ua or "Opera/" in ua:
+            app_info = "Opera"
+        elif "Safari/" in ua and "Chrome" not in ua:
+            m = __import__("re").search(r"Version/([\d.]+)", ua)
+            app_info = f"Safari {m.group(1)}" if m else "Safari"
+
+    # OS detection
     if "Windows NT 10" in ua:
         os_info = "Windows 10"
     elif "Windows NT 11" in ua:
@@ -117,8 +162,11 @@ def _parse_ua(ua):
         os_info = f"iOS {m.group(1).replace('_','.')}" if m else "iOS"
     elif "Linux" in ua:
         os_info = "Linux"
+
+    # Device model
     if "iPhone" in ua:
-        device_info = "iPhone"
+        m = __import__("re").search(r"iPhone(\d+,\d+)?", ua)
+        device_info = f"iPhone {m.group(0).replace(',',' ')}" if m else "iPhone"
     elif "iPad" in ua:
         device_info = "iPad"
     elif "SM-" in ua:
@@ -131,20 +179,20 @@ def _parse_ua(ua):
         device_info = "Xiaomi"
     elif "OPPO" in ua or "CPH" in ua:
         device_info = "OPPO"
-    elif "vivo" in ua or "V" in ua:
-        m = __import__("re").search(r"V\d{4}", ua)
-        device_info = f"vivo {m.group(0)}" if m else "vivo"
+    elif "vivo" in ua or __import__("re").search(r"\bV\d{4}\b", ua):
+        device_info = "vivo"
     elif "OnePlus" in ua:
         device_info = "OnePlus"
+    elif "ZyperDesktop" in ua or "Wails" in ua:
+        device_info = "Desktop App"
     elif "Macintosh" in ua:
         device_info = "Mac"
     elif "Windows" in ua:
         device_info = "PC"
     elif "Linux" in ua and "Android" not in ua:
         device_info = "Linux PC"
-    elif "httpx" in ua or "python-requests" in ua or "curl" in ua or "wget" in ua:
-        device_info = "Script/API"
-    return os_info, browser_info, device_info
+
+    return os_info, app_info, device_info
 
 async def _log_audit(action, hwid, key, ip, user_agent, success, reason=""):
     if db is None:
@@ -727,7 +775,9 @@ button{background:#00ff88;color:#000;border:none;padding:12px 30px;font-size:16p
         ip = s.get("ip", "-")
         ua = s.get("user_agent", "-")
         os_info, browser_info, device_info = _parse_ua(ua)
-        device_tag = f"{os_info} / {browser_info} / {device_info}".replace(" / - / ", " ").replace(" / -", "").replace("- / ", "")
+        ip_loc = _get_ip_location(ip)
+        ip_display = f"{ip}<br><span style='font-size:9px;color:#888'>{ip_loc}</span>" if ip_loc != "-" else ip
+        device_tag = f"{os_info} / {app_info} / {device_info}".replace(" / - / ", " ").replace(" / -", "").replace("- / ", "")
         first = s["first_seen"].strftime("%d %b %H:%M") if s.get("first_seen") else "-"
         last = s["last_seen"].strftime("%d %b %H:%M") if s.get("last_seen") else "-"
         key_note = ""
@@ -739,7 +789,7 @@ button{background:#00ff88;color:#000;border:none;padding:12px 30px;font-size:16p
         user_rows += f"""<tr>
         <td style="font-size:10px;word-break:break-all">{hwid}</td>
         <td class="kc" style="font-size:10px">{key}</td>
-        <td>{ip}</td>
+        <td style="font-size:11px">{ip_display}</td>
         <td style="font-size:10px" title="{ua}">{device_tag}</td>
         <td style="font-size:9px;max-width:200px;overflow:hidden;text-overflow:ellipsis">{ua}</td>
         <td class="ts">{first}</td><td class="ts">{last}</td>
@@ -969,12 +1019,14 @@ async def dashboard_history(request: Request):
         reason = a.get("reason", "") or ""
         status_cls = "active" if success else "disabled"
         status_txt = "Success" if success else "Failed"
+        ip_loc = _get_ip_location(ip)
+        ip_display = f"{ip}<br><span style='font-size:9px;color:#888'>{ip_loc}</span>" if ip_loc != "-" else ip
         audit_rows += f"""<tr>
         <td class="ts">{ts}</td>
         <td>{action}</td>
         <td style="font-size:10px">{hwid}</td>
         <td style="font-size:10px;color:#00ff88">{key}</td>
-        <td>{ip}</td>
+        <td style="font-size:11px">{ip_display}</td>
         <td style="font-size:9px">{ua}</td>
         <td><span class="s {status_cls}">{status_txt}</span></td>
         <td>{reason}</td></tr>"""
@@ -990,7 +1042,9 @@ async def dashboard_history(request: Request):
         ip = s.get("ip", "-") or "-"
         ua = s.get("user_agent", "-") or "-"
         os_info, browser_info, device_info = _parse_ua(ua)
-        device_tag = f"{os_info} / {browser_info} / {device_info}".replace(" / - / ", " ").replace(" / -", "").replace("- / ", "")
+        device_tag = f"{os_info} / {app_info} / {device_info}".replace(" / - / ", " ").replace(" / -", "").replace("- / ", "")
+        ip_loc = _get_ip_location(ip)
+        ip_display = f"{ip}<br><span style='font-size:9px;color:#888'>{ip_loc}</span>" if ip_loc != "-" else ip
         first = s["first_seen"].strftime("%d %b %H:%M") if s.get("first_seen") else "-"
         last = s["last_seen"].strftime("%d %b %H:%M") if s.get("last_seen") else "-"
         status_cls = "active" if active else "kicked"
@@ -998,7 +1052,7 @@ async def dashboard_history(request: Request):
         past_rows += f"""<tr>
         <td style="font-size:10px">{hwid}</td>
         <td style="font-size:10px;color:#00ff88">{key}</td>
-        <td>{ip}</td>
+        <td style="font-size:11px">{ip_display}</td>
         <td style="font-size:10px" title="{ua}">{device_tag}</td>
         <td style="font-size:9px;max-width:200px;overflow:hidden;text-overflow:ellipsis">{ua}</td>
         <td class="ts">{first}</td><td class="ts">{last}</td>
