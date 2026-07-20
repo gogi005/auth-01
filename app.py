@@ -1,6 +1,8 @@
 import os
 import json
 import time
+import uuid
+import secrets
 import threading
 import httpx
 from datetime import datetime, timedelta
@@ -10,9 +12,6 @@ from fastapi import FastAPI, Request, HTTPException, Form
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
-from bson import ObjectId
-from pydantic import BaseModel
-from typing import Optional
 
 MONGO_URI = os.environ.get("MONGO_URI", "")
 ADMIN_PASSWORD = os.environ.get("ADMIN_PASS", "zyper-admin-2026")
@@ -30,53 +29,23 @@ ENDPOINTS = {
 }
 
 kill_switch = False
-_sessions = {}
-_sessions_lock = threading.Lock()
-
-
-def _session_set(ip, hwid):
-    with _sessions_lock:
-        _sessions[ip] = {"hwid": hwid, "ts": time.time()}
-
-
-def _session_get(ip):
-    with _sessions_lock:
-        s = _sessions.get(ip)
-        if s and time.time() - s["ts"] < 86400:
-            return s["hwid"]
-        if s:
-            del _sessions[ip]
-    return None
-
-
-def _get_client_ip(request: Request):
-    forwarded = request.headers.get("x-forwarded-for")
-    if forwarded:
-        return forwarded.split(",")[0].strip()
-    real_ip = request.headers.get("x-real-ip")
-    if real_ip:
-        return real_ip
-    return request.client.host if request.client else "unknown"
 
 
 def _fetch_endpoint(path, method="GET"):
     try:
         url = REAL_BASE + path
         resp = httpx.get(url, timeout=15, follow_redirects=True, verify=False)
-        data = resp.content
         with _cache_lock:
-            _cache[path] = (resp.status_code, dict(resp.headers), data)
+            _cache[path] = (resp.status_code, dict(resp.headers), resp.content)
         return True
-    except Exception as e:
-        import traceback
-        traceback.print_exc()
+    except Exception:
         return False
 
 
 def _refresh_cache_loop():
     while True:
-        for path, method in ENDPOINTS.items():
-            _fetch_endpoint(path, method)
+        for path in ENDPOINTS:
+            _fetch_endpoint(path)
         time.sleep(120)
 
 
@@ -85,17 +54,33 @@ def _get_cached(path):
         return _cache.get(path)
 
 
+def _get_client_ip(request: Request):
+    fwd = request.headers.get("x-forwarded-for")
+    if fwd:
+        return fwd.split(",")[0].strip()
+    rip = request.headers.get("x-real-ip")
+    if rip:
+        return rip
+    return request.client.host if request.client else "unknown"
+
+
+def generate_key():
+    return f"ZYPER-{secrets.token_hex(4).upper()}-{secrets.token_hex(4).upper()}-{secrets.token_hex(4).upper()}"
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global db, client
     if MONGO_URI:
         client = AsyncIOMotorClient(MONGO_URI)
         db = client.zyper_auth
-        await db.devices.create_index("hwid", unique=True)
+        await db.keys.create_index("key", unique=True)
+        await db.keys.create_index("hwid")
+        await db.sessions.create_index("hwid")
     bg = threading.Thread(target=_refresh_cache_loop, daemon=True)
     bg.start()
-    for path, method in ENDPOINTS.items():
-        _fetch_endpoint(path, method)
+    for path in ENDPOINTS:
+        _fetch_endpoint(path)
     yield
     if client:
         client.close()
@@ -114,181 +99,185 @@ app.add_middleware(
 
 @app.middleware("http")
 async def log_requests(request: Request, call_next):
-    if not request.url.path.startswith("/dashboard"):
-        print(f"[REQ] {request.method} {request.url.path} from={request.client.host if request.client else '?'} headers={dict(request.headers)}", flush=True)
+    path = request.url.path
+    if not path.startswith("/dashboard") and not path.startswith("/health"):
+        ip = _get_client_ip(request)
+        print(f"[REQ] {request.method} {path} from={ip}", flush=True)
     response = await call_next(request)
     return response
 
 
 def _is_admin(request: Request):
-    token = request.cookies.get("admin_token")
-    if token == ADMIN_PASSWORD:
-        return True
-    return False
-
-
-DASHBOARD_HTML = """<!DOCTYPE html>
-<html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Zyper Auth Dashboard</title>
-<style>
-*{margin:0;padding:0;box-sizing:border-box}
-body{background:#0a0a0a;color:#e0e0e0;font-family:monospace;min-height:100vh}
-.hdr{background:#111;border-bottom:1px solid #333;padding:16px 24px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap}
-.hdr h1{color:#00ff88;font-size:18px}
-.stats{display:flex;gap:12px}
-.st{background:#1a1a1a;border:1px solid #333;border-radius:6px;padding:8px 14px;text-align:center}
-.st .n{font-size:22px;font-weight:bold;color:#00ff88}
-.st .l{font-size:10px;color:#888;text-transform:uppercase}
-.ct{max-width:1200px;margin:16px auto;padding:0 16px}
-.sec{background:#111;border:1px solid #333;border-radius:8px;margin-bottom:16px;overflow:hidden}
-.sh{background:#1a1a1a;padding:10px 14px;border-bottom:1px solid #333;display:flex;justify-content:space-between;align-items:center}
-.sh h2{font-size:13px;color:#00ff88}
-.bg{background:#00ff88;color:#000;padding:2px 8px;border-radius:10px;font-size:11px;font-weight:bold}
-table{width:100%;border-collapse:collapse}
-th{text-align:left;padding:8px 14px;font-size:11px;color:#888;text-transform:uppercase;border-bottom:1px solid #333}
-td{padding:8px 14px;font-size:12px;border-bottom:1px solid #222}
-tr:hover{background:#1a1a1a}
-.s{padding:2px 8px;border-radius:10px;font-size:10px;font-weight:bold;text-transform:uppercase}
-.s.pending{background:#332200;color:#ffaa00}
-.s.approved{background:#003322;color:#00ff88}
-.s.blocked{background:#330000;color:#ff4444}
-.ac{display:flex;gap:4px;flex-wrap:wrap}
-.b{padding:4px 10px;border:none;border-radius:4px;font-size:10px;cursor:pointer;font-weight:bold;text-decoration:none}
-.b.ap{background:#00ff88;color:#000}
-.b.bl{background:#ff4444;color:#fff}
-.b.ex{background:#ffaa00;color:#000}
-.b.dl{background:#333;color:#fff}
-.b:hover{opacity:.85}
-.af{display:flex;gap:6px;align-items:center;flex-wrap:wrap}
-.af input,.af select{background:#0a0a0a;color:#fff;border:1px solid #333;padding:6px 10px;border-radius:4px;font-size:12px}
-.cd{color:#ffaa00;font-weight:bold}
-.ex{color:#ff4444}
-</style></head><body>
-<div class="hdr"><h1>Zyper Auth Dashboard</h1>
-<div style="display:flex;align-items:center;gap:16px">
-<div class="stats">
-<div class="st"><div class="n">TOTAL</div><div class="l">devices</div></div>
-<div class="st"><div class="n" style="color:#ffaa00">PENDING</div><div class="l">requests</div></div>
-<div class="st"><div class="n" style="color:#00ff88">ACTIVE</div><div class="l">devices</div></div>
-</div>
-<form method="POST" action="/dashboard/refresh" style="display:inline">
-<button class="b ex" type="submit">Refresh Modules</button></form>
-<form method="POST" action="/dashboard/killswitch" style="display:inline">
-<button class="b KS_CLASS" type="submit">KS_LABEL</button></form>
-<a href="/dashboard/logout" style="color:#ff4444;text-decoration:none;font-size:12px;font-weight:bold">Logout</a>
-</div></div>
-<div class="ct">
-<div class="sec"><div class="sh"><h2>Pending Requests</h2></div>
-<table><tr><th>HWID</th><th>Name</th><th>Requested</th><th>Action</th></tr>
-PENDING_ROWS
-</table></div>
-<div class="sec"><div class="sh"><h2>All Devices</h2></div>
-<table><tr><th>HWID</th><th>Name</th><th>Status</th><th>Expires</th><th>Remaining</th><th>Actions</th></tr>
-DEVICE_ROWS
-</table></div>
-</div>
-<script>setTimeout(()=>location.reload(),15000)</script>
-</body></html>"""
+    return request.cookies.get("admin_token") == ADMIN_PASSWORD
 
 
 @app.post("/v1/license/validate")
 async def license_validate(request: Request):
     body = await request.body()
-    req_hwid = ""
+    data = {}
     if body:
         try:
             data = json.loads(body)
-            req_hwid = data.get("hwid", "")
-        except:
+        except Exception:
             pass
+
+    req_hwid = data.get("hwid", "")
+    req_key = data.get("key", "")
+    client_ip = _get_client_ip(request)
+    user_agent = request.headers.get("user-agent", "")
 
     if not req_hwid:
         return JSONResponse({"ok": False, "state": "invalid", "error": "no hwid"})
+
     if db is None:
         return JSONResponse({"ok": False, "state": "invalid", "error": "no database"})
 
-    device = await db.devices.find_one({"hwid": req_hwid})
+    if kill_switch:
+        return JSONResponse({"ok": False, "state": "invalid", "error": "system offline"})
 
-    if not device:
-        await db.devices.insert_one({
-            "hwid": req_hwid, "name": "", "status": "pending",
-            "created_at": datetime.utcnow(), "approved_at": None, "expires_at": None,
+    if req_key:
+        key_doc = await db.keys.find_one({"key": req_key})
+        if not key_doc:
+            return JSONResponse({"ok": False, "state": "invalid", "error": "invalid key"})
+
+        if key_doc.get("disabled"):
+            return JSONResponse({"ok": False, "state": "invalid", "error": "key revoked"})
+
+        if key_doc.get("expires_at") and datetime.utcnow() > key_doc["expires_at"]:
+            return JSONResponse({"ok": False, "state": "invalid", "error": "key expired"})
+
+        max_devices = key_doc.get("max_devices", 1)
+        using_devices = await db.keys.count_documents({
+            "key": req_key,
+            "active": True,
+            "hwid": {"$ne": req_hwid}
         })
-        return JSONResponse({"ok": False, "state": "pending", "error": "waiting for approval"})
+        bound_hwids = await db.sessions.distinct("hwid", {"bound_key": req_key})
+        if req_hwid not in bound_hwids and len(bound_hwids) >= max_devices:
+            return JSONResponse({"ok": False, "state": "invalid", "error": "max devices reached"})
 
-    if device["status"] == "pending":
-        return JSONResponse({"ok": False, "state": "pending", "error": "waiting for approval"})
-    if device["status"] == "blocked":
-        return JSONResponse({"ok": False, "state": "blocked", "error": "device blocked"})
-    if device["expires_at"] and datetime.utcnow() > device["expires_at"]:
-        return JSONResponse({"ok": False, "state": "expired", "error": "access expired"})
+        await db.sessions.update_one(
+            {"hwid": req_hwid},
+            {"$set": {
+                "hwid": req_hwid,
+                "ip": client_ip,
+                "user_agent": user_agent,
+                "bound_key": req_key,
+                "last_seen": datetime.utcnow(),
+                "active": True,
+                "first_seen": datetime.utcnow(),
+            },
+            "$setOnInsert": {"created_at": datetime.utcnow()}},
+            upsert=True,
+        )
 
-    remaining = None
-    if device["expires_at"]:
-        remaining = (device["expires_at"] - datetime.utcnow()).total_seconds()
+        return JSONResponse({
+            "ok": True,
+            "state": "valid",
+            "hwid": req_hwid,
+            "hasKey": True,
+            "key": req_key,
+            "expires_at": key_doc["expires_at"].isoformat() if key_doc.get("expires_at") else None,
+        })
 
-    client_ip = _get_client_ip(request)
-    _session_set(client_ip, req_hwid)
+    session = await db.sessions.find_one({"hwid": req_hwid})
+    if session and session.get("bound_key"):
+        bound_key = await db.keys.find_one({"key": session["bound_key"]})
+        if bound_key and not bound_key.get("disabled"):
+            if bound_key.get("expires_at") and datetime.utcnow() > bound_key["expires_at"]:
+                return JSONResponse({"ok": False, "state": "invalid", "error": "key expired"})
 
-    return JSONResponse({
-        "ok": True, "state": "valid", "hwid": req_hwid, "hasKey": True,
-        "expires_at": device["expires_at"].isoformat() if device["expires_at"] else None,
-        "remaining_seconds": int(remaining) if remaining else None,
-    })
+            await db.sessions.update_one(
+                {"hwid": req_hwid},
+                {"$set": {"last_seen": datetime.utcnow(), "ip": client_ip, "user_agent": user_agent}}
+            )
+
+            return JSONResponse({
+                "ok": True,
+                "state": "valid",
+                "hwid": req_hwid,
+                "hasKey": True,
+                "key": session["bound_key"],
+                "expires_at": bound_key["expires_at"].isoformat() if bound_key.get("expires_at") else None,
+            })
+
+    return JSONResponse({"ok": False, "state": "pending", "error": "enter license key"})
 
 
 @app.post("/v1/license/activate")
 async def license_activate(request: Request):
     body = await request.body()
-    req_hwid = ""
+    data = {}
     if body:
         try:
             data = json.loads(body)
-            req_hwid = data.get("hwid", "")
-        except:
+        except Exception:
             pass
+
+    req_hwid = data.get("hwid", "")
+    req_key = data.get("key", "")
+    client_ip = _get_client_ip(request)
+    user_agent = request.headers.get("user-agent", "")
+
     if not req_hwid:
         return JSONResponse({"ok": False, "error": "no hwid"})
+
     if db is None:
         return JSONResponse({"ok": False, "error": "no database"})
-    device = await db.devices.find_one({"hwid": req_hwid})
-    if not device:
-        await db.devices.insert_one({
-            "hwid": req_hwid, "name": "", "status": "pending",
-            "created_at": datetime.utcnow(), "approved_at": None, "expires_at": None,
-        })
-        return JSONResponse({"ok": False, "state": "pending", "error": "waiting for approval"})
 
-    if device["status"] == "pending":
-        return JSONResponse({"ok": False, "state": "pending", "error": "waiting for approval"})
-    if device["status"] == "blocked":
-        return JSONResponse({"ok": False, "state": "blocked", "error": "device blocked"})
-    if device["expires_at"] and datetime.utcnow() > device["expires_at"]:
-        return JSONResponse({"ok": False, "state": "expired", "error": "access expired"})
-
-    return JSONResponse({"ok": True, "state": "valid", "hwid": req_hwid})
-
-
-async def _check_device(request: Request) -> dict:
     if kill_switch:
-        return {"ok": False, "reason": "kill_switch"}
-    if db is None:
-        return {"ok": True, "reason": "no_db"}
-    client_ip = _get_client_ip(request)
-    hwid = _session_get(client_ip)
-    if hwid:
-        device = await db.devices.find_one({"hwid": hwid})
-        if device and device["status"] == "blocked":
-            return {"ok": False, "reason": "blocked"}
-        if device and device.get("expires_at") and datetime.utcnow() > device["expires_at"]:
-            return {"ok": False, "reason": "expired"}
-    return {"ok": True, "reason": "ok"}
+        return JSONResponse({"ok": False, "error": "system offline"})
+
+    if not req_key:
+        return JSONResponse({"ok": False, "state": "pending", "error": "enter license key"})
+
+    key_doc = await db.keys.find_one({"key": req_key})
+    if not key_doc:
+        return JSONResponse({"ok": False, "state": "invalid", "error": "invalid key"})
+
+    if key_doc.get("disabled"):
+        return JSONResponse({"ok": False, "state": "invalid", "error": "key revoked"})
+
+    if key_doc.get("expires_at") and datetime.utcnow() > key_doc["expires_at"]:
+        return JSONResponse({"ok": False, "state": "invalid", "error": "key expired"})
+
+    max_devices = key_doc.get("max_devices", 1)
+    bound_hwids = await db.sessions.distinct("hwid", {"bound_key": req_key})
+    if req_hwid not in bound_hwids and len(bound_hwids) >= max_devices:
+        return JSONResponse({"ok": False, "state": "invalid", "error": "max devices reached"})
+
+    await db.sessions.update_one(
+        {"hwid": req_hwid},
+        {"$set": {
+            "hwid": req_hwid,
+            "ip": client_ip,
+            "user_agent": user_agent,
+            "bound_key": req_key,
+            "last_seen": datetime.utcnow(),
+            "active": True,
+            "first_seen": datetime.utcnow(),
+        },
+        "$setOnInsert": {"created_at": datetime.utcnow()}} ,
+        upsert=True,
+    )
+
+    await db.keys.update_one(
+        {"key": req_key},
+        {"$set": {"last_used": datetime.utcnow(), "used_by_hwid": req_hwid}}
+    )
+
+    return JSONResponse({
+        "ok": True,
+        "state": "valid",
+        "hwid": req_hwid,
+        "key": req_key,
+    })
 
 
 @app.get("/v1/modules")
 async def get_modules(request: Request):
-    check = await _check_device(request)
-    if not check["ok"]:
+    check = await _check_heartbeat(request)
+    if not check:
         return JSONResponse({"modules": []})
     cached = _get_cached("/v1/modules")
     if cached:
@@ -298,8 +287,8 @@ async def get_modules(request: Request):
 
 @app.get("/v1/social-modules")
 async def get_social_modules(request: Request):
-    check = await _check_device(request)
-    if not check["ok"]:
+    check = await _check_heartbeat(request)
+    if not check:
         return JSONResponse({"modules": []})
     cached = _get_cached("/v1/social-modules")
     if cached:
@@ -309,13 +298,138 @@ async def get_social_modules(request: Request):
 
 @app.get("/v1/checker-modules")
 async def get_checker_modules(request: Request):
-    check = await _check_device(request)
-    if not check["ok"]:
+    check = await _check_heartbeat(request)
+    if not check:
         return JSONResponse({"modules": []})
     cached = _get_cached("/v1/checker-modules")
     if cached:
         return JSONResponse(json.loads(cached[2]))
     return JSONResponse({"modules": []})
+
+
+async def _check_heartbeat(request: Request) -> bool:
+    if kill_switch:
+        return False
+    if db is None:
+        return True
+    hwid = request.headers.get("x-hwid", "")
+    if not hwid:
+        return True
+    session = await db.sessions.find_one({"hwid": hwid})
+    if not session:
+        return True
+    if session.get("bound_key"):
+        key_doc = await db.keys.find_one({"key": session["bound_key"]})
+        if key_doc and key_doc.get("disabled"):
+            return False
+    return True
+
+
+@app.api_route("/v1/telemetry", methods=["GET", "POST", "OPTIONS"])
+async def telemetry(request: Request):
+    return JSONResponse({"ok": True})
+
+
+@app.api_route("/v1/manifest", methods=["GET", "POST", "OPTIONS"])
+async def manifest(request: Request):
+    return JSONResponse({"ok": False, "error": "no updates available"})
+
+
+@app.api_route("/v1/assets/{path:path}", methods=["GET", "POST", "OPTIONS"])
+async def assets(path: str):
+    return JSONResponse({"ok": True})
+
+
+@app.api_route("/v1/extensions/{path:path}", methods=["GET", "POST", "OPTIONS"])
+async def extensions(path: str):
+    return JSONResponse({"ok": True})
+
+
+@app.api_route("/v1/{path:path}", methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"])
+async def api_catch_all(path: str, request: Request):
+    return JSONResponse({"ok": True})
+
+
+@app.get("/health")
+async def health():
+    return {"status": "ok", "time": datetime.utcnow().isoformat()}
+
+
+DASHBOARD_HTML = """<!DOCTYPE html>
+<html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Zyper Auth Dashboard</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{background:#0a0a0a;color:#e0e0e0;font-family:'Segoe UI',monospace;min-height:100vh}
+.hdr{background:#111;border-bottom:1px solid #333;padding:16px 24px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:12px}
+.hdr h1{color:#00ff88;font-size:18px}
+.stats{display:flex;gap:12px;flex-wrap:wrap}
+.st{background:#1a1a1a;border:1px solid #333;border-radius:6px;padding:8px 14px;text-align:center}
+.st .n{font-size:22px;font-weight:bold;color:#00ff88}
+.st .l{font-size:10px;color:#888;text-transform:uppercase}
+.ct{max-width:1400px;margin:16px auto;padding:0 16px}
+.sec{background:#111;border:1px solid #333;border-radius:8px;margin-bottom:16px;overflow:hidden}
+.sh{background:#1a1a1a;padding:10px 14px;border-bottom:1px solid #333;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px}
+.sh h2{font-size:13px;color:#00ff88}
+table{width:100%;border-collapse:collapse}
+th{text-align:left;padding:8px 14px;font-size:11px;color:#888;text-transform:uppercase;border-bottom:1px solid #333}
+td{padding:8px 14px;font-size:12px;border-bottom:1px solid #222}
+tr:hover{background:#1a1a1a}
+.s{padding:2px 8px;border-radius:10px;font-size:10px;font-weight:bold;text-transform:uppercase;display:inline-block}
+.s.active{background:#003322;color:#00ff88}
+.s.disabled{background:#330000;color:#ff4444}
+.s.expired{background:#332200;color:#ffaa00}
+.b{padding:6px 14px;border:none;border-radius:4px;font-size:11px;cursor:pointer;font-weight:bold;text-decoration:none;display:inline-block}
+.b.gen{background:#00ff88;color:#000}
+.b.dl{background:#333;color:#fff}
+.b.bl{background:#ff4444;color:#fff}
+.b.grn{background:#00ff88;color:#000}
+.b:hover{opacity:.85}
+.gen-form{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:12px 14px}
+.gen-form input,.gen-form select{background:#0a0a0a;color:#fff;border:1px solid #333;padding:6px 10px;border-radius:4px;font-size:12px}
+.gen-form label{font-size:11px;color:#888}
+.kc{font-family:monospace;color:#00ff88;letter-spacing:1px}
+.ts{font-size:10px;color:#666}
+.on{color:#00ff88}.off{color:#ff4444}
+.info{font-size:10px;color:#555;padding:4px 14px}
+</style></head><body>
+<div class="hdr"><h1>Zyper Auth Dashboard</h1>
+<div style="display:flex;align-items:center;gap:16px;flex-wrap:wrap">
+<div class="stats">
+<div class="st"><div class="n">TOTAL</div><div class="l">keys</div></div>
+<div class="st"><div class="n" style="color:#00ff88">ACTIVE</div><div class="l">users</div></div>
+<div class="st"><div class="n" style="color:#ffaa00">KEYS</div><div class="l">generated</div></div>
+</div>
+<form method="POST" action="/dashboard/refresh" style="display:inline"><button class="b gen" type="submit">Refresh Modules</button></form>
+<form method="POST" action="/dashboard/killswitch" style="display:inline"><button class="b KS_CLASS" type="submit">KS_LABEL</button></form>
+<a href="/dashboard/logout" style="color:#ff4444;text-decoration:none;font-size:12px;font-weight:bold">Logout</a>
+</div></div>
+<div class="ct">
+
+<div class="sec"><div class="sh"><h2>Generate New Key</h2></div>
+<form method="POST" action="/dashboard/generate" class="gen-form">
+<label>Days:</label><input type="number" name="days" value="30" min="1" max="365" style="width:60px">
+<label>Max Devices:</label><input type="number" name="max_devices" value="1" min="1" max="10" style="width:60px">
+<label>Note:</label><input type="text" name="note" placeholder="optional note" style="width:200px">
+<label>Count:</label><input type="number" name="count" value="1" min="1" max="20" style="width:60px">
+<button class="b gen" type="submit">Generate Keys</button>
+</form>
+NEW_KEYS
+</div>
+
+<div class="sec"><div class="sh"><h2>Active Users</h2></div>
+<table><tr><th>HWID</th><th>Key</th><th>IP</th><th>User Agent</th><th>First Seen</th><th>Last Seen</th><th>Note</th><th>Actions</th></tr>
+USER_ROWS
+</table></div>
+
+<div class="sec"><div class="sh"><h2>All Keys</h2></div>
+<table><tr><th>Key</th><th>Status</th><th>Devices</th><th>Expires</th><th>Note</th><th>Created</th><th>Actions</th></tr>
+KEY_ROWS
+</table></div>
+
+</div>
+<script>setTimeout(()=>location.reload(),15000)</script>
+</body></html>"""
 
 
 @app.post("/dashboard/login")
@@ -357,131 +471,130 @@ button{background:#00ff88;color:#000;border:none;padding:12px 30px;font-size:16p
     if db is None:
         return HTMLResponse("<h1 style='color:red'>Database not connected</h1>")
 
-    devices = await db.devices.find().sort("created_at", -1).to_list(100)
+    keys = await db.keys.find().sort("created_at", -1).to_list(200)
+    sessions = await db.sessions.find().sort("last_seen", -1).to_list(200)
 
-    pending_rows = ""
-    device_rows = ""
-    pending_count = 0
-    active_count = 0
+    total_keys = len(keys)
+    active_users = sum(1 for s in sessions if s.get("active"))
 
-    for d in devices:
-        remaining = None
-        if d.get("expires_at"):
-            rem = (d["expires_at"] - datetime.utcnow()).total_seconds()
-            remaining = max(0, int(rem))
+    key_rows = ""
+    for k in keys:
+        status = "disabled" if k.get("disabled") else ("expired" if k.get("expires_at") and datetime.utcnow() > k["expires_at"] else "active")
+        exp = k["expires_at"].strftime("%d %b %Y %H:%M") if k.get("expires_at") else "never"
+        created = k["created_at"].strftime("%d %b %Y %H:%M") if k.get("created_at") else "-"
+        note = k.get("note", "") or "-"
+        maxd = k.get("max_devices", 1)
+        key_rows += f"""<tr><td class="kc">{k['key']}</td>
+        <td><span class="s {status}">{status}</span></td>
+        <td>{maxd}</td><td style="font-size:10px">{exp}</td>
+        <td style="font-size:10px">{note}</td><td class="ts">{created}</td>
+        <td>
+        <form method="POST" action="/dashboard/toggle-key" style="display:inline"><input type="hidden" name="key" value="{k['key']}"><button class="b {'bl' if status=='active' else 'grn'}" type="submit">{'Revoke' if status=='active' else 'Enable'}</button></form>
+        <form method="POST" action="/dashboard/delete-key" style="display:inline"><input type="hidden" name="key" value="{k['key']}"><button class="b dl" type="submit">Del</button></form>
+        </td></tr>"""
 
-        hwid = d["hwid"]
-        name = d.get("name", "") or "-"
-        status = d["status"]
-        created = d["created_at"].strftime("%d %b %H:%M") if d.get("created_at") else "-"
-        exp = d["expires_at"].strftime("%d %b %H:%M") if d.get("expires_at") else "N/A"
+    if not key_rows:
+        key_rows = '<tr><td colspan="7" style="text-align:center;color:#555;padding:16px">No keys generated yet</td></tr>'
 
-        if remaining:
-            rem_h = round(remaining / 3600, 1)
-            if rem_h > 24:
-                rem_str = f'<span class="cd">{round(rem_h/24,1)}d</span>'
-            elif rem_h > 0:
-                rem_str = f'<span class="cd">{rem_h}h</span>'
-            else:
-                rem_str = '<span class="ex">EXPIRED</span>'
-        else:
-            rem_str = "-"
+    user_rows = ""
+    for s in sessions:
+        if not s.get("active"):
+            continue
+        hwid = s.get("hwid", "-")[:20] + "..."
+        key = s.get("bound_key", "-")
+        ip = s.get("ip", "-")
+        ua = s.get("user_agent", "-")
+        if len(ua) > 50:
+            ua = ua[:50] + "..."
+        first = s["first_seen"].strftime("%d %b %H:%M") if s.get("first_seen") else "-"
+        last = s["last_seen"].strftime("%d %b %H:%M") if s.get("last_seen") else "-"
+        key_note = ""
+        if key and key != "-":
+            kd = await db.keys.find_one({"key": key})
+            key_note = kd.get("note", "") if kd else ""
+        user_rows += f"""<tr>
+        <td style="font-size:10px;word-break:break-all">{hwid}</td>
+        <td class="kc" style="font-size:10px">{key}</td>
+        <td>{ip}</td>
+        <td style="font-size:9px;max-width:200px;overflow:hidden;text-overflow:ellipsis">{ua}</td>
+        <td class="ts">{first}</td><td class="ts">{last}</td>
+        <td style="font-size:10px">{key_note or '-'}</td>
+        <td>
+        <form method="POST" action="/dashboard/kick" style="display:inline"><input type="hidden" name="hwid" value="{s.get('hwid','')}"><button class="b bl" type="submit">Kick</button></form>
+        </td></tr>"""
 
-        if status == "pending":
-            pending_count += 1
-            pending_rows += f"""<tr><td style="font-size:10px;word-break:break-all">{hwid}</td><td>{name}</td><td>{created}</td><td>
-            <form method="POST" action="/dashboard/approve" style="display:inline">
-            <input type="hidden" name="hwid" value="{hwid}">
-            <input type="number" name="days" value="7" min="1" max="365" style="width:45px">
-            <input type="text" name="name" placeholder="name" style="width:70px">
-            <button class="b ap" type="submit">Approve</button></form>
-            <form method="POST" action="/dashboard/block" style="display:inline">
-            <input type="hidden" name="hwid" value="{hwid}">
-            <button class="b bl" type="submit">Block</button></form></td></tr>"""
-        else:
-            if status == "approved":
-                active_count += 1
-            actions = ""
-            if status == "approved":
-                actions += f"""<form method="POST" action="/dashboard/extend" style="display:inline">
-                <input type="hidden" name="hwid" value="{hwid}">
-                <input type="number" name="days" value="7" min="1" style="width:40px">
-                <button class="b ex" type="submit">+Days</button></form>"""
-            actions += f"""<form method="POST" action="/dashboard/delete" style="display:inline">
-            <input type="hidden" name="hwid" value="{hwid}">
-            <button class="b dl" type="submit">Del</button></form>"""
-            device_rows += f"""<tr><td style="font-size:10px;word-break:break-all">{hwid}</td><td>{name}</td>
-            <td><span class="s {status}">{status}</span></td><td style="font-size:10px">{exp}</td>
-            <td>{rem_str}</td><td><div class="ac">{actions}</div></td></tr>"""
+    if not user_rows:
+        user_rows = '<tr><td colspan="8" style="text-align:center;color:#555;padding:16px">No active users</td></tr>'
 
-    if not pending_rows:
-        pending_rows = '<tr><td colspan="4" style="text-align:center;color:#555;padding:16px">No pending requests</td></tr>'
-    if not device_rows:
-        device_rows = '<tr><td colspan="6" style="text-align:center;color:#555;padding:16px">No devices yet</td></tr>'
-
-    html = DASHBOARD_HTML.replace("PENDING_ROWS", pending_rows).replace("DEVICE_ROWS", device_rows)
-    html = html.replace("TOTAL", str(len(devices))).replace("PENDING", str(pending_count)).replace("ACTIVE", str(active_count))
-    if kill_switch:
-        html = html.replace("KS_CLASS", "bl").replace("KS_LABEL", "KILL: ON")
-    else:
-        html = html.replace("KS_CLASS", "ap").replace("KS_LABEL", "KILL: OFF")
+    html = DASHBOARD_HTML.replace("KEY_ROWS", key_rows).replace("USER_ROWS", user_rows)
+    html = html.replace("TOTAL", str(total_keys)).replace("ACTIVE", str(active_users)).replace("KEYS", str(total_keys))
+    html = html.replace("KS_CLASS", "bl" if kill_switch else "grn").replace("KS_LABEL", "KILL: ON" if kill_switch else "KILL: OFF")
+    html = html.replace("NEW_KEYS", "")
     return HTMLResponse(html)
 
 
-@app.post("/dashboard/approve")
-async def approve_device(request: Request, hwid: str = Form(...), days: int = Form(7), name: str = Form("")):
+@app.post("/dashboard/generate")
+async def generate_keys(request: Request, days: int = Form(30), max_devices: int = Form(1), note: str = Form(""), count: int = Form(1)):
     if not _is_admin(request):
         raise HTTPException(401, "Unauthorized")
     if db is None:
         raise HTTPException(500, "No database")
-    expires = datetime.utcnow() + timedelta(days=days)
-    await db.devices.update_one({"hwid": hwid}, {"$set": {"status": "approved", "name": name, "approved_at": datetime.utcnow(), "expires_at": expires}})
+
+    generated = []
+    for _ in range(min(count, 20)):
+        key = generate_key()
+        expires = datetime.utcnow() + timedelta(days=days)
+        await db.keys.insert_one({
+            "key": key,
+            "max_devices": max_devices,
+            "expires_at": expires,
+            "note": note,
+            "disabled": False,
+            "created_at": datetime.utcnow(),
+            "last_used": None,
+            "used_by_hwid": None,
+        })
+        generated.append(key)
+
     return RedirectResponse(url="/dashboard", status_code=302)
 
 
-@app.post("/dashboard/block")
-async def block_device(request: Request, hwid: str = Form(...)):
+@app.post("/dashboard/toggle-key")
+async def toggle_key(request: Request, key: str = Form(...)):
     if not _is_admin(request):
         raise HTTPException(401, "Unauthorized")
     if db is None:
         raise HTTPException(500, "No database")
-    await db.devices.update_one({"hwid": hwid}, {"$set": {"status": "blocked"}})
+    key_doc = await db.keys.find_one({"key": key})
+    if not key_doc:
+        raise HTTPException(404, "Key not found")
+    new_disabled = not key_doc.get("disabled", False)
+    await db.keys.update_one({"key": key}, {"$set": {"disabled": new_disabled}})
+
+    if new_disabled:
+        await db.sessions.update_many({"bound_key": key}, {"$set": {"active": False}})
+
     return RedirectResponse(url="/dashboard", status_code=302)
 
 
-@app.post("/dashboard/unblock")
-async def unblock_device(request: Request, hwid: str = Form(...)):
+@app.post("/dashboard/delete-key")
+async def delete_key(request: Request, key: str = Form(...)):
     if not _is_admin(request):
         raise HTTPException(401, "Unauthorized")
     if db is None:
         raise HTTPException(500, "No database")
-    await db.devices.update_one({"hwid": hwid}, {"$set": {"status": "approved"}})
+    await db.keys.delete_one({"key": key})
+    await db.sessions.update_many({"bound_key": key}, {"$set": {"active": False, "bound_key": ""}})
     return RedirectResponse(url="/dashboard", status_code=302)
 
 
-@app.post("/dashboard/extend")
-async def extend_device(request: Request, hwid: str = Form(...), days: int = Form(7)):
+@app.post("/dashboard/kick")
+async def kick_user(request: Request, hwid: str = Form(...)):
     if not _is_admin(request):
         raise HTTPException(401, "Unauthorized")
     if db is None:
         raise HTTPException(500, "No database")
-    device = await db.devices.find_one({"hwid": hwid})
-    if not device:
-        raise HTTPException(404, "Device not found")
-    base = datetime.utcnow()
-    if device.get("expires_at") and device["expires_at"] > datetime.utcnow():
-        base = device["expires_at"]
-    await db.devices.update_one({"hwid": hwid}, {"$set": {"expires_at": base + timedelta(days=days), "status": "approved"}})
-    return RedirectResponse(url="/dashboard", status_code=302)
-
-
-@app.post("/dashboard/delete")
-async def delete_device(request: Request, hwid: str = Form(...)):
-    if not _is_admin(request):
-        raise HTTPException(401, "Unauthorized")
-    if db is None:
-        raise HTTPException(500, "No database")
-    await db.devices.delete_one({"hwid": hwid})
+    await db.sessions.update_one({"hwid": hwid}, {"$set": {"active": False}})
     return RedirectResponse(url="/dashboard", status_code=302)
 
 
@@ -491,6 +604,8 @@ async def toggle_killswitch(request: Request):
         raise HTTPException(401, "Unauthorized")
     global kill_switch
     kill_switch = not kill_switch
+    if kill_switch and db:
+        await db.sessions.update_many({}, {"$set": {"active": False}})
     return RedirectResponse(url="/dashboard", status_code=302)
 
 
@@ -498,72 +613,9 @@ async def toggle_killswitch(request: Request):
 async def refresh_cache(request: Request):
     if not _is_admin(request):
         raise HTTPException(401, "Unauthorized")
-    results = {}
-    for path, method in ENDPOINTS.items():
-        ok = _fetch_endpoint(path, method)
-        cached = _get_cached(path)
-        size = len(cached[2]) if cached else 0
-        results[path] = {"ok": ok, "size": size}
-    return RedirectResponse(url="/dashboard", status_code=302)
-
-
-@app.get("/dashboard/api/cache")
-async def cache_status(request: Request):
-    if not _is_admin(request):
-        raise HTTPException(401, "Unauthorized")
-    status = {}
     for path in ENDPOINTS:
-        cached = _get_cached(path)
-        if cached:
-            status[path] = {"size": len(cached[2]), "status": cached[0]}
-        else:
-            status[path] = {"size": 0, "status": "none"}
-    return JSONResponse({"kill_switch": kill_switch, "cache": status})
-
-
-@app.get("/dashboard/api/debug-fetch")
-async def debug_fetch(request: Request):
-    if not _is_admin(request):
-        raise HTTPException(401, "Unauthorized")
-    results = {}
-    for path, method in ENDPOINTS.items():
-        url = REAL_BASE + path
-        try:
-            resp = httpx.get(url, timeout=15, follow_redirects=True, verify=False)
-            results[path] = {"status": resp.status_code, "size": len(resp.content), "body_preview": resp.text[:200]}
-        except Exception as e:
-            results[path] = {"error": str(e)}
-    return JSONResponse(results)
-
-
-@app.api_route("/v1/telemetry", methods=["GET", "POST", "OPTIONS"])
-async def telemetry(request: Request):
-    return JSONResponse({"ok": True})
-
-
-@app.api_route("/v1/manifest", methods=["GET", "POST", "OPTIONS"])
-async def manifest(request: Request):
-    return JSONResponse({"ok": False, "error": "no updates available"})
-
-
-@app.api_route("/v1/assets/{path:path}", methods=["GET", "POST", "OPTIONS"])
-async def assets(path: str):
-    return JSONResponse({"ok": True})
-
-
-@app.api_route("/v1/extensions/{path:path}", methods=["GET", "POST", "OPTIONS"])
-async def extensions(path: str):
-    return JSONResponse({"ok": True})
-
-
-@app.api_route("/v1/{path:path}", methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"])
-async def api_catch_all(path: str, request: Request):
-    return JSONResponse({"ok": True})
-
-
-@app.get("/health")
-async def health():
-    return {"status": "ok", "time": datetime.utcnow().isoformat()}
+        _fetch_endpoint(path)
+    return RedirectResponse(url="/dashboard", status_code=302)
 
 
 if __name__ == "__main__":
