@@ -112,6 +112,14 @@ app.add_middleware(
 )
 
 
+@app.middleware("http")
+async def log_requests(request: Request, call_next):
+    if not request.url.path.startswith("/dashboard"):
+        print(f"[REQ] {request.method} {request.url.path} from={request.client.host if request.client else '?'} headers={dict(request.headers)}", flush=True)
+    response = await call_next(request)
+    return response
+
+
 def _is_admin(request: Request):
     token = request.cookies.get("admin_token")
     if token == ADMIN_PASSWORD:
