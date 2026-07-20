@@ -429,7 +429,7 @@ NEW_KEYS
 </div>
 
 <div class="sec"><div class="sh"><h2>Active Users</h2></div>
-<table><tr><th>HWID</th><th>Key</th><th>IP</th><th>User Agent</th><th>First Seen</th><th>Last Seen</th><th>Note</th><th>Actions</th></tr>
+<table><tr><th>HWID</th><th>Key</th><th>IP</th><th>User Agent</th><th>First Seen</th><th>Last Seen</th><th>Note</th><th>Status</th><th>Actions</th></tr>
 USER_ROWS
 </table></div>
 
@@ -509,9 +509,8 @@ button{background:#00ff88;color:#000;border:none;padding:12px 30px;font-size:16p
 
     user_rows = ""
     for s in sessions:
-        if not s.get("active"):
-            continue
-        hwid = s.get("hwid", "-")[:20] + "..."
+        active = s.get("active", True)
+        hwid = s.get("hwid", "-")
         key = s.get("bound_key", "-")
         ip = s.get("ip", "-")
         ua = s.get("user_agent", "-")
@@ -523,6 +522,8 @@ button{background:#00ff88;color:#000;border:none;padding:12px 30px;font-size:16p
         if key and key != "-":
             kd = await db.keys.find_one({"key": key})
             key_note = kd.get("note", "") if kd else ""
+        status_label = "active" if active else "kicked"
+        status_color = "active" if active else "disabled"
         user_rows += f"""<tr>
         <td style="font-size:10px;word-break:break-all">{hwid}</td>
         <td class="kc" style="font-size:10px">{key}</td>
@@ -530,13 +531,14 @@ button{background:#00ff88;color:#000;border:none;padding:12px 30px;font-size:16p
         <td style="font-size:9px;max-width:200px;overflow:hidden;text-overflow:ellipsis">{ua}</td>
         <td class="ts">{first}</td><td class="ts">{last}</td>
         <td style="font-size:10px">{key_note or '-'}</td>
+        <td><span class="s {status_color}">{status_label}</span></td>
         <td>
-        <form method="POST" action="/dashboard/kick" style="display:inline"><input type="hidden" name="hwid" value="{s.get('hwid','')}"><button class="b bl" type="submit">Kick</button></form>
-        <form method="POST" action="/dashboard/unkick" style="display:inline"><input type="hidden" name="hwid" value="{s.get('hwid','')}"><button class="b grn" type="submit">Unkick</button></form>
+        {f'<form method="POST" action="/dashboard/kick" style="display:inline"><input type="hidden" name="hwid" value="{hwid}"><button class="b bl" type="submit">Kick</button></form>' if active else ''}
+        {f'<form method="POST" action="/dashboard/unkick" style="display:inline"><input type="hidden" name="hwid" value="{hwid}"><button class="b grn" type="submit">Unkick</button></form>' if not active else ''}
         </td></tr>"""
 
     if not user_rows:
-        user_rows = '<tr><td colspan="8" style="text-align:center;color:#555;padding:16px">No active users</td></tr>'
+        user_rows = '<tr><td colspan="9" style="text-align:center;color:#555;padding:16px">No users yet</td></tr>'
 
     html = DASHBOARD_HTML.replace("KEY_ROWS", key_rows).replace("USER_ROWS", user_rows)
     html = html.replace("TOTAL", str(total_keys)).replace("ACTIVE", str(active_users)).replace("KEYS", str(total_keys))
