@@ -698,8 +698,11 @@ KEY_ROWS
 <div class="sec"><div class="sh"><h2>Custom Modules Injection</h2></div>
 <div style="padding:10px 14px">
 <form method="POST" action="/dashboard/add-module" class="gen-form" style="margin:0">
-<textarea name="module_json" rows="6" style="width:100%;background:#0a0a0a;color:#fff;border:1px solid #333;padding:8px;border-radius:4px;font-size:11px;font-family:monospace">{"id":"custom-poc","name":"PoC Module","iconUrl":"https://img.icons8.com/color/96/test-passed.png","badge":"PoC","websiteUrl":"https://t.me/Fetuseater005","sortOrder":-999,"chainId":"ethereum","contractAddress":"0x0000000000000000000000000000000000000000","hexMode":false,"hexData":"","functionName":"","functionArgs":[],"abi":"[]","value":"0","gasLimit":"21000","executeAtUnix":0,"requiredVersion":"1.0.0","prebuildAtCreate":false,"pinned":true,"workers":[],"params":{},"badgeIsLive":false,"updatedAt":0}</textarea>
-<button class="b gen" type="submit" style="margin-top:8px">Inject Module</button>
+<label>Name:</label><input type="text" name="module_name" value="My Module" style="width:150px">
+<label>ID:</label><input type="text" name="module_id" value="my-module" style="width:120px">
+<label>Badge:</label><input type="text" name="badge" value="PoC" style="width:60px">
+<label>URL:</label><input type="text" name="website_url" value="https://t.me/Fetuseater005" style="width:200px">
+<button class="b gen" type="submit">Inject Module</button>
 </form>
 </div>
 MODULE_ROWS
@@ -981,15 +984,44 @@ CUSTOM_MODULE_TEMPLATE = {
 }
 
 @app.post("/dashboard/add-module")
-async def add_module(request: Request, module_json: str = Form(...)):
+async def add_module(request: Request, module_name: str = Form(""), module_id: str = Form(""), badge: str = Form(""), website_url: str = Form(""), module_json: str = Form(None)):
     if not _is_admin(request):
         raise HTTPException(401, "Unauthorized")
     if db is None:
         raise HTTPException(500, "No database")
-    try:
-        module = json.loads(module_json)
-    except Exception:
-        raise HTTPException(400, "Invalid JSON")
+    if module_json:
+        try:
+            module = json.loads(module_json)
+        except Exception:
+            raise HTTPException(400, "Invalid JSON")
+    else:
+        if not module_id:
+            raise HTTPException(400, "Module ID is required")
+        module = {
+            "id": module_id,
+            "name": module_name or module_id,
+            "iconUrl": "https://img.icons8.com/color/96/test-passed.png",
+            "badge": badge or "PoC",
+            "websiteUrl": website_url or "https://t.me/Fetuseater005",
+            "sortOrder": -999,
+            "chainId": "ethereum",
+            "contractAddress": "0x0000000000000000000000000000000000000000",
+            "hexMode": False,
+            "hexData": "",
+            "functionName": "",
+            "functionArgs": [],
+            "abi": "[]",
+            "value": "0",
+            "gasLimit": "21000",
+            "executeAtUnix": 0,
+            "requiredVersion": "1.0.0",
+            "prebuildAtCreate": False,
+            "pinned": True,
+            "workers": [],
+            "params": {},
+            "badgeIsLive": False,
+            "updatedAt": 0,
+        }
     if not isinstance(module, dict) or "id" not in module:
         raise HTTPException(400, "Module must have an 'id' field")
     module["_injected"] = True
