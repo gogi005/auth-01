@@ -512,11 +512,11 @@ async def get_modules(request: Request):
     modules = []
     if cached:
         modules = json.loads(cached[2]).get("modules", [])
-    modules = await _inject_custom_modules(modules)
+    modules = await _inject_custom_modules(modules, "onchain")
     return JSONResponse({"modules": modules})
 
 
-async def _inject_custom_modules(modules):
+async def _inject_custom_modules(modules, kind_filter=None):
     if db is None:
         return modules
     try:
@@ -524,8 +524,15 @@ async def _inject_custom_modules(modules):
         custom = await db.custom_modules.find().to_list(100) if db is not None else []
         for c in custom:
             m = {k: v for k, v in c.items() if k != "_id"}
-            if m.get("id") and m["id"] not in existing_ids:
-                modules.append(m)
+            if not m.get("id"):
+                continue
+            if m["id"] in existing_ids:
+                continue
+            if kind_filter == "social" and m.get("kind") != "http":
+                continue
+            if kind_filter == "onchain" and m.get("kind") == "http":
+                continue
+            modules.append(m)
     except Exception:
         pass
     return modules
@@ -540,7 +547,7 @@ async def get_social_modules(request: Request):
     modules = []
     if cached:
         modules = json.loads(cached[2]).get("modules", [])
-    modules = await _inject_custom_modules(modules)
+    modules = await _inject_custom_modules(modules, "social")
     return JSONResponse({"modules": modules})
 
 
@@ -553,7 +560,7 @@ async def get_checker_modules(request: Request):
     modules = []
     if cached:
         modules = json.loads(cached[2]).get("modules", [])
-    modules = await _inject_custom_modules(modules)
+    modules = await _inject_custom_modules(modules, None)
     return JSONResponse({"modules": modules})
 
 
@@ -1285,8 +1292,10 @@ async def refresh_cache(request: Request):
 CONSOLE_CAPTURE_SCRIPT = """(async()=>{
 const orig=fetch;window._reqs=[];
 // Try to get site icon
-let siteIcon=document.querySelector('link[rel=icon]')?.href||document.querySelector('link[rel="shortcut icon"]')?.href||
-  document.querySelector('meta[property="og:image"]')?.content||location.origin+'/favicon.ico';
+let siteIcon=document.querySelector('meta[property="og:image"]')?.content||
+  document.querySelector('link[rel="apple-touch-icon"]')?.href||
+  (document.querySelector('link[rel=icon]')?.href||'').split('?')[0]||
+  location.origin+'/favicon.ico';
 let siteTitle=document.title.replace(/[^a-zA-Z0-9 ]/g,'').trim().slice(0,30)||'Custom';
 let siteDesc=document.querySelector('meta[name=description]')?.content||document.querySelector('meta[property="og:description"]')?.content||'';
 window.fetch=async function(...a){
