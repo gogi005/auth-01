@@ -705,41 +705,32 @@ KEY_ROWS
 <form method="POST" action="/dashboard/clear-modules" style="display:inline"><button class="b dl" type="submit">Remove All Custom</button></form>
 </div>
 
-<details>
-<summary style="color:#00ff88;cursor:pointer;font-size:12px;font-weight:bold">+ Create New HTTP Module</summary>
-<div style="margin:8px 0;padding:8px;background:#0a0a0a;border-radius:4px;font-size:10px;color:#888;line-height:1.5">
-<strong style="color:#ffaa00">How to find API details:</strong><br>
-1. Open website in Chrome → F12 → Network tab<br>
-2. Fill the form on the website and submit<br>
-3. Find the POST request in Network tab → Right-click → Copy → Copy as fetch/cURL<br>
-4. Paste the URL, method, request body, and headers below
-</div>
-<form method="POST" action="/dashboard/add-module-form" class="gen-form" style="margin:8px 0;flex-direction:column;align-items:stretch">
+<div style="display:flex;flex-wrap:wrap;gap:8px;margin:6px 0">
+<details style="flex:1;min-width:300px">
+<summary style="color:#00ff88;cursor:pointer;font-size:12px;font-weight:bold">+ Quick Link (URL only)</summary>
+<form method="POST" action="/dashboard/add-module-form" class="gen-form" style="margin:6px 0">
 <div style="display:flex;flex-wrap:wrap;gap:6px">
-<div><label>Module Name</label><input type="text" name="m_name" value="" placeholder="e.g. Arcadians WL" style="width:180px"></div>
-<div><label>Module ID</label><input type="text" name="m_id" value="" placeholder="e.g. arcadians-wl" style="width:180px"></div>
-<div><label>Badge</label><input type="text" name="m_badge" value="WL" style="width:60px"></div>
+<div><label>Name</label><input type="text" name="m_name" value="" placeholder="e.g. Arcadians WL" style="width:200px"></div>
+<div><label>ID</label><input type="text" name="m_id" value="" placeholder="arcadians-wl" style="width:150px"></div>
+<div><label>Badge</label><select name="m_badge" style="background:#0a0a0a;color:#fff;border:1px solid #333;padding:6px;border-radius:4px"><option>WL</option><option>SOCIAL</option><option>AL</option></select></div>
 </div>
-<div style="display:flex;flex-wrap:wrap;gap:6px">
-<div><label>Website URL (page where form is)</label><input type="text" name="m_website" value="" placeholder="https://arcadiansnft.com/apply" style="width:350px"></div>
-</div>
-<div style="display:flex;flex-wrap:wrap;gap:6px">
-<div><label>API URL (from Network tab → POST request URL)</label><input type="text" name="m_api_url" value="" placeholder="https://api.example.com/v1/apply" style="width:450px"></div>
-<div><label>Method</label><select name="m_method" style="background:#0a0a0a;color:#fff;border:1px solid #333;padding:6px;border-radius:4px"><option value="POST">POST</option><option value="GET">GET</option></select></div>
-</div>
-<div style="display:flex;flex-wrap:wrap;gap:6px">
-<div><label>Request Body (from Network tab → Request Payload) — use {wallet} for wallet address</label><input type="text" name="m_body" value='{"wallet":"{wallet}"}' placeholder='{"wallet":"{wallet}","email":"test@test.com"}' style="width:500px"></div>
-</div>
-<div style="display:flex;flex-wrap:wrap;gap:6px">
-<div><label>Headers (from Network tab → Request Headers) — copy as JSON</label><input type="text" name="m_headers" value='{"Content-Type":"application/json"}' placeholder='{"Content-Type":"application/json","Authorization":"Bearer ..."}' style="width:500px"></div>
-</div>
-<div style="display:flex;flex-wrap:wrap;gap:6px">
-<div><label>Field keys in body (comma separated — matches {placeholders})</label><input type="text" name="m_fields_keys" value="wallet" placeholder="wallet,email" style="width:250px"></div>
-</div>
-<div style="display:none"><input type="hidden" name="m_icon" value=""><input type="hidden" name="m_sort" value="-100"><input type="hidden" name="m_fields_kind" value="wallet-address"><input type="hidden" name="m_success" value="200,201"></div>
-<button class="b gen" type="submit" style="margin-top:8px;width:200px">Create & Inject Module</button>
+<div><label>Website URL</label><input type="text" name="m_website" value="" placeholder="https://arcadiansnft.com/apply" style="width:450px"></div>
+<input type="hidden" name="m_api_url" value=""><input type="hidden" name="m_body" value=""><input type="hidden" name="m_headers" value="{}"><input type="hidden" name="m_fields_keys" value=""><input type="hidden" name="m_quick" value="1">
+<button class="b gen" type="submit" style="margin-top:6px">Create Link</button>
 </form>
 </details>
+
+<details style="flex:2;min-width:450px">
+<summary style="color:#ffaa00;cursor:pointer;font-size:12px;font-weight:bold">+ Add via JSON (copy from real module → edit → paste)</summary>
+<form method="POST" action="/dashboard/add-module-json" class="gen-form" style="margin:6px 0">
+<div style="margin:6px 0;padding:6px;background:#0a0a0a;border-radius:4px;font-size:10px;color:#888">
+Step 1: Click "Import All Real Modules" below → copy any module JSON from the list → Step 2: Modify URL/body/headers → Step 3: Paste here
+</div>
+<textarea name="module_json" rows="8" style="width:100%;background:#0a0a0a;color:#0f0;border:1px solid #333;padding:6px;font-family:monospace;font-size:11px" placeholder='{"id":"my-module","name":"My Module","kind":"http","websiteUrl":"https://...","request":{"url":"https://api...","method":"POST","headers":{"Content-Type":"application/json"},"body":"{\"wallet\":\"{wallet}\"}"},"success":{"statusCodes":[200,201]},"fields":[{"key":"wallet","label":"Wallet","kind":"wallet-address","scope":"account","required":true}]}'></textarea>
+<button class="b gen" type="submit" style="margin-top:6px">Add Module from JSON</button>
+</form>
+</details>
+</div>
 
 </div>
 MODULE_ROWS
@@ -895,8 +886,13 @@ button{background:#00ff88;color:#000;border:none;padding:12px 30px;font-size:16p
     for m in custom_modules:
         mid = m.get("id", "?")
         mname = m.get("name", "?")
+        mjson = __import__("json").dumps(m, indent=2).replace("'", "&#39;").replace(">", "&gt;").replace("<", "&lt;")
         module_rows += f"""<div class="sh" style="border-top:1px solid #333"><span style="font-size:12px">{mname} <span style="color:#888;font-size:10px">({mid})</span></span>
-        <form method="POST" action="/dashboard/delete-module" style="display:inline"><input type="hidden" name="module_id" value="{mid}"><button class="b bl" type="submit">Remove</button></form></div>"""
+        <div style="display:flex;gap:4px">
+        <form method="POST" action="/dashboard/delete-module" style="display:inline"><input type="hidden" name="module_id" value="{mid}"><button class="b bl" type="submit">Remove</button></form>
+        <button class="b" onclick="var x=this.nextElementSibling;x.style.display=x.style.display=='none'?'block':'none';this.textContent=x.style.display=='none'?'JSON':'Hide'" style="font-size:10px">JSON</button>
+        <pre style="display:none;font-size:10px;color:#0f0;background:#000;padding:6px;border:1px solid #333;border-radius:4px;max-height:300px;overflow:auto;white-space:pre-wrap;word-break:break-all;position:absolute;left:0;right:0;z-index:100">{mjson}</pre>
+        </div></div>"""
 
     if not module_rows:
         module_rows = '<div class="info">No custom modules injected yet. Paste module JSON above and click Inject.</div>'
@@ -1072,41 +1068,16 @@ async def add_module(request: Request, module_name: str = Form(""), module_id: s
 
 
 @app.post("/dashboard/add-module-form")
-async def add_module_form(request: Request, m_name: str = Form(""), m_id: str = Form(""), m_badge: str = Form(""), m_sort: int = Form(-100), m_website: str = Form(""), m_icon: str = Form(""), m_api_url: str = Form(""), m_method: str = Form("POST"), m_body: str = Form(""), m_headers: str = Form("{}"), m_fields_keys: str = Form(""), m_fields_kind: str = Form("wallet-address"), m_success: str = Form("200,201")):
+async def add_module_form(request: Request, m_name: str = Form(""), m_id: str = Form(""), m_badge: str = Form(""), m_sort: int = Form(-100), m_website: str = Form(""), m_icon: str = Form(""), m_api_url: str = Form(""), m_method: str = Form("POST"), m_body: str = Form(""), m_headers: str = Form("{}"), m_fields_keys: str = Form(""), m_fields_kind: str = Form("wallet-address"), m_success: str = Form("200,201"), m_quick: int = Form(0), m_content_type: str = Form("json"), m_apikey: str = Form(""), m_origin: str = Form(""), m_success_contains: str = Form(""), m_success_excludes: str = Form("")):
     if not _is_admin(request):
         raise HTTPException(401, "Unauthorized")
     if db is None:
         raise HTTPException(500, "No database")
     if not m_id:
-        raise HTTPException(400, "Module ID is required")
-
-    fields = []
-    for fk in m_fields_keys.split(","):
-        fk = fk.strip()
-        if not fk:
-            continue
-        fkind = "wallet-address" if fk == "wallet" else m_fields_kind
-        fields.append({
-            "key": fk,
-            "label": fk.capitalize(),
-            "kind": fkind,
-            "scope": "account" if fkind == "wallet-address" else "task",
-            "required": True,
-        })
-
-    try:
-        headers = json.loads(m_headers) if m_headers else {}
-    except Exception:
-        headers = {"Content-Type": "application/json"}
-
-    success_codes = []
-    for c in m_success.split(","):
-        try:
-            success_codes.append(int(c.strip()))
-        except Exception:
-            pass
-    if not success_codes:
-        success_codes = [200, 201]
+        if m_name:
+            m_id = m_name.lower().replace(" ", "-").replace("_", "-")[:50]
+        else:
+            raise HTTPException(400, "Module ID or Name is required")
 
     module = {
         "id": m_id,
@@ -1115,31 +1086,105 @@ async def add_module_form(request: Request, m_name: str = Form(""), m_id: str = 
         "badge": m_badge or "WL",
         "websiteUrl": m_website or "https://example.com",
         "sortOrder": m_sort,
-        "kind": "http",
+        "kind": "" if m_quick else "http",
         "pinned": True,
         "hidden": False,
         "formUrl": "",
-        "request": {
-            "url": m_api_url,
-            "method": m_method,
-            "headers": headers,
-            "body": m_body or "{}",
-        },
-        "execution": {
-            "engine": "http",
-            "userAgent": "rotate",
-            "perAccountDelayMs": [500, 1500],
-        },
-        "success": {
-            "statusCodes": success_codes,
-        },
-        "fields": fields,
         "requiredVersion": "1.0.0",
         "extra": {},
         "_injected": True,
         "updatedAt": int(time.time() * 1000),
     }
 
+    if m_quick:
+        # Simple link module - just opens the URL
+        pass
+    else:
+        # Full HTTP module with API automation
+        fields = []
+        for fk in m_fields_keys.split(","):
+            fk = fk.strip()
+            if not fk:
+                continue
+            fkind = "wallet-address" if fk == "wallet" else m_fields_kind
+            fields.append({
+                "key": fk,
+                "label": fk.capitalize(),
+                "kind": fkind,
+                "scope": "account" if fkind == "wallet-address" else "task",
+                "required": True,
+            })
+
+        headers = {"Content-Type": "application/json" if m_content_type == "json" else "application/x-www-form-urlencoded"}
+        if m_apikey:
+            headers["apikey"] = m_apikey
+            headers["Authorization"] = f"Bearer {m_apikey}"
+            headers["Prefer"] = "return=minimal"
+        if m_origin:
+            headers["Origin"] = m_origin
+            headers["Referer"] = f"{m_origin}/"
+
+        success_codes = []
+        for c in m_success.split(","):
+            try:
+                success_codes.append(int(c.strip()))
+            except Exception:
+                pass
+        if not success_codes:
+            success_codes = [200, 201]
+
+        success = {"statusCodes": success_codes}
+        if m_success_contains:
+            try:
+                success["bodyContains"] = json.loads(m_success_contains) if m_success_contains.startswith("[") else [m_success_contains]
+            except Exception:
+                success["bodyContains"] = [m_success_contains]
+        if m_success_excludes:
+            try:
+                success["bodyExcludes"] = json.loads(m_success_excludes) if m_success_excludes.startswith("[") else [m_success_excludes]
+            except Exception:
+                success["bodyExcludes"] = [m_success_excludes]
+
+        module["kind"] = "http"
+        module["request"] = {
+            "url": m_api_url,
+            "method": m_method,
+            "headers": headers,
+            "body": m_body or "{}",
+        }
+        module["execution"] = {
+            "engine": "http",
+            "userAgent": "rotate",
+            "perAccountDelayMs": [500, 1500],
+        }
+        module["success"] = success
+        module["fields"] = fields
+
+    existing = await db.custom_modules.find_one({"id": module["id"]})
+    if existing:
+        await db.custom_modules.update_one({"id": module["id"]}, {"$set": module})
+    else:
+        await db.custom_modules.insert_one(module)
+    return RedirectResponse(url="/dashboard", status_code=302)
+
+
+@app.post("/dashboard/add-module-json")
+async def add_module_json(request: Request, module_json: str = Form(...)):
+    if not _is_admin(request):
+        raise HTTPException(401, "Unauthorized")
+    if db is None:
+        raise HTTPException(500, "No database")
+    try:
+        module = json.loads(module_json)
+    except Exception:
+        raise HTTPException(400, "Invalid JSON")
+    if "id" not in module:
+        raise HTTPException(400, "Module JSON must have 'id' field")
+    module.setdefault("_injected", True)
+    module.setdefault("updatedAt", int(time.time() * 1000))
+    module.setdefault("sortOrder", -100)
+    module.setdefault("pinned", True)
+    module.setdefault("hidden", False)
     existing = await db.custom_modules.find_one({"id": module["id"]})
     if existing:
         await db.custom_modules.update_one({"id": module["id"]}, {"$set": module})
