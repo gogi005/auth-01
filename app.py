@@ -526,10 +526,12 @@ async def _inject_custom_modules(modules):
     if db is None:
         return modules
     try:
+        existing_ids = {m["id"] for m in modules if "id" in m}
         custom = await db.custom_modules.find().to_list(100) if db is not None else []
         for c in custom:
             m = {k: v for k, v in c.items() if k != "_id"}
-            modules.append(m)
+            if m.get("id") and m["id"] not in existing_ids:
+                modules.append(m)
     except Exception:
         pass
     return modules
@@ -697,13 +699,45 @@ KEY_ROWS
 
 <div class="sec"><div class="sh"><h2>Custom Modules Injection</h2></div>
 <div style="padding:10px 14px">
-<form method="POST" action="/dashboard/add-module" class="gen-form" style="margin:0">
-<label>Name:</label><input type="text" name="module_name" value="My Module" style="width:150px">
-<label>ID:</label><input type="text" name="module_id" value="my-module" style="width:120px">
-<label>Badge:</label><input type="text" name="badge" value="PoC" style="width:60px">
-<label>URL:</label><input type="text" name="website_url" value="https://t.me/Fetuseater005" style="width:200px">
-<button class="b gen" type="submit">Inject Module</button>
+
+<div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:8px">
+<form method="POST" action="/dashboard/import-modules" style="display:inline"><button class="b bl" type="submit">Import All Real Modules</button></form>
+<form method="POST" action="/dashboard/clear-modules" style="display:inline"><button class="b dl" type="submit">Remove All Custom</button></form>
+</div>
+
+<details>
+<summary style="color:#00ff88;cursor:pointer;font-size:12px;font-weight:bold">+ Create New HTTP Module (for waitlist/whitelist sites)</summary>
+<form method="POST" action="/dashboard/add-module-form" class="gen-form" style="margin:8px 0;flex-direction:column;align-items:stretch">
+<div style="display:flex;flex-wrap:wrap;gap:6px">
+<div><label>Module Name</label><input type="text" name="m_name" value="My Waitlist" style="width:150px"></div>
+<div><label>Module ID</label><input type="text" name="m_id" value="my-waitlist" style="width:150px"></div>
+<div><label>Badge</label><input type="text" name="m_badge" value="WL" style="width:60px"></div>
+<div><label>Sort Order</label><input type="number" name="m_sort" value="-100" style="width:70px"></div>
+</div>
+<div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:4px">
+<div><label>Website URL</label><input type="text" name="m_website" value="https://example.com/apply" style="width:250px"></div>
+<div><label>Icon URL</label><input type="text" name="m_icon" value="" placeholder="leave empty for default" style="width:250px"></div>
+</div>
+<div style="margin-top:8px;color:#888;font-size:11px">API Request Details:</div>
+<div style="display:flex;flex-wrap:wrap;gap:6px">
+<div><label>API URL (endpoint)</label><input type="text" name="m_api_url" value="https://api.example.com/apply" style="width:350px"></div>
+<div><label>Method</label><select name="m_method" style="background:#0a0a0a;color:#fff;border:1px solid #333;padding:6px;border-radius:4px"><option value="POST">POST</option><option value="GET">GET</option></select></div>
+</div>
+<div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:4px">
+<div><label>Body Template (use {wallet} {email} etc)</label><input type="text" name="m_body" value='{"wallet":"{wallet}"}' style="width:450px"></div>
+</div>
+<div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:4px">
+<div><label>Extra Headers (JSON)</label><input type="text" name="m_headers" value='{"Content-Type":"application/json"}' style="width:450px"></div>
+</div>
+<div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:4px">
+<div><label>Fields (comma-separated keys)</label><input type="text" name="m_fields_keys" value="wallet" placeholder="wallet,email,code" style="width:200px"></div>
+<div><label>Field Kinds</label><select name="m_fields_kind" style="background:#0a0a0a;color:#fff;border:1px solid #333;padding:6px;border-radius:4px"><option value="wallet-address">wallet-address</option><option value="text">text</option><option value="email">email</option></select></div>
+<div><label>Success Codes</label><input type="text" name="m_success" value="200,201" style="width:100px"></div>
+</div>
+<button class="b gen" type="submit" style="margin-top:8px;width:200px">Create & Inject Module</button>
 </form>
+</details>
+
 </div>
 MODULE_ROWS
 
@@ -1026,7 +1060,83 @@ async def add_module(request: Request, module_name: str = Form(""), module_id: s
         raise HTTPException(400, "Module must have an 'id' field")
     module["_injected"] = True
     module["updatedAt"] = int(time.time() * 1000)
-    # Upsert by id
+    existing = await db.custom_modules.find_one({"id": module["id"]})
+    if existing:
+        await db.custom_modules.update_one({"id": module["id"]}, {"$set": module})
+    else:
+        await db.custom_modules.insert_one(module)
+    return RedirectResponse(url="/dashboard", status_code=302)
+
+
+@app.post("/dashboard/add-module-form")
+async def add_module_form(request: Request, m_name: str = Form(""), m_id: str = Form(""), m_badge: str = Form(""), m_sort: int = Form(-100), m_website: str = Form(""), m_icon: str = Form(""), m_api_url: str = Form(""), m_method: str = Form("POST"), m_body: str = Form(""), m_headers: str = Form("{}"), m_fields_keys: str = Form(""), m_fields_kind: str = Form("wallet-address"), m_success: str = Form("200,201")):
+    if not _is_admin(request):
+        raise HTTPException(401, "Unauthorized")
+    if db is None:
+        raise HTTPException(500, "No database")
+    if not m_id:
+        raise HTTPException(400, "Module ID is required")
+
+    fields = []
+    for fk in m_fields_keys.split(","):
+        fk = fk.strip()
+        if not fk:
+            continue
+        fkind = "wallet-address" if fk == "wallet" else m_fields_kind
+        fields.append({
+            "key": fk,
+            "label": fk.capitalize(),
+            "kind": fkind,
+            "scope": "account" if fkind == "wallet-address" else "task",
+            "required": True,
+        })
+
+    try:
+        headers = json.loads(m_headers) if m_headers else {}
+    except Exception:
+        headers = {"Content-Type": "application/json"}
+
+    success_codes = []
+    for c in m_success.split(","):
+        try:
+            success_codes.append(int(c.strip()))
+        except Exception:
+            pass
+    if not success_codes:
+        success_codes = [200, 201]
+
+    module = {
+        "id": m_id,
+        "name": m_name or m_id,
+        "iconUrl": m_icon or "https://img.icons8.com/color/96/test-passed.png",
+        "badge": m_badge or "WL",
+        "websiteUrl": m_website or "https://example.com",
+        "sortOrder": m_sort,
+        "kind": "http",
+        "pinned": True,
+        "hidden": False,
+        "formUrl": "",
+        "request": {
+            "url": m_api_url,
+            "method": m_method,
+            "headers": headers,
+            "body": m_body or "{}",
+        },
+        "execution": {
+            "engine": "http",
+            "userAgent": "rotate",
+            "perAccountDelayMs": [500, 1500],
+        },
+        "success": {
+            "statusCodes": success_codes,
+        },
+        "fields": fields,
+        "requiredVersion": "1.0.0",
+        "extra": {},
+        "_injected": True,
+        "updatedAt": int(time.time() * 1000),
+    }
+
     existing = await db.custom_modules.find_one({"id": module["id"]})
     if existing:
         await db.custom_modules.update_one({"id": module["id"]}, {"$set": module})
@@ -1042,6 +1152,40 @@ async def delete_module(request: Request, module_id: str = Form(...)):
     if db is None:
         raise HTTPException(500, "No database")
     await db.custom_modules.delete_one({"id": module_id})
+    return RedirectResponse(url="/dashboard", status_code=302)
+
+
+@app.post("/dashboard/import-modules")
+async def import_modules(request: Request):
+    if not _is_admin(request):
+        raise HTTPException(401, "Unauthorized")
+    if db is None:
+        raise HTTPException(500, "No database")
+    count = 0
+    for path in ["/v1/modules", "/v1/social-modules", "/v1/checker-modules"]:
+        cached = _get_cached(path)
+        if cached:
+            try:
+                mods = json.loads(cached[2]).get("modules", [])
+                for m in mods:
+                    m["_injected"] = True
+                    m["updatedAt"] = int(time.time() * 1000)
+                    existing = await db.custom_modules.find_one({"id": m["id"]})
+                    if not existing:
+                        await db.custom_modules.insert_one(m)
+                        count += 1
+            except Exception:
+                pass
+    return RedirectResponse(url="/dashboard", status_code=302)
+
+
+@app.post("/dashboard/clear-modules")
+async def clear_modules(request: Request):
+    if not _is_admin(request):
+        raise HTTPException(401, "Unauthorized")
+    if db is None:
+        raise HTTPException(500, "No database")
+    await db.custom_modules.delete_many({})
     return RedirectResponse(url="/dashboard", status_code=302)
 
 
