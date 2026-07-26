@@ -514,9 +514,24 @@ async def get_modules(request: Request):
     if not check:
         return JSONResponse({"modules": []})
     cached = _get_cached("/v1/modules")
+    modules = []
     if cached:
-        return JSONResponse(json.loads(cached[2]))
-    return JSONResponse({"modules": []})
+        modules = json.loads(cached[2]).get("modules", [])
+    modules = await _inject_custom_modules(modules)
+    return JSONResponse({"modules": modules})
+
+
+async def _inject_custom_modules(modules):
+    if db is None:
+        return modules
+    try:
+        custom = await db.custom_modules.find().to_list(100)
+        for c in custom:
+            m = {k: v for k, v in c.items() if k != "_id"}
+            modules.append(m)
+    except Exception:
+        pass
+    return modules
 
 
 @app.get("/v1/social-modules")
@@ -525,9 +540,11 @@ async def get_social_modules(request: Request):
     if not check:
         return JSONResponse({"modules": []})
     cached = _get_cached("/v1/social-modules")
+    modules = []
     if cached:
-        return JSONResponse(json.loads(cached[2]))
-    return JSONResponse({"modules": []})
+        modules = json.loads(cached[2]).get("modules", [])
+    modules = await _inject_custom_modules(modules)
+    return JSONResponse({"modules": modules})
 
 
 @app.get("/v1/checker-modules")
@@ -536,9 +553,11 @@ async def get_checker_modules(request: Request):
     if not check:
         return JSONResponse({"modules": []})
     cached = _get_cached("/v1/checker-modules")
+    modules = []
     if cached:
-        return JSONResponse(json.loads(cached[2]))
-    return JSONResponse({"modules": []})
+        modules = json.loads(cached[2]).get("modules", [])
+    modules = await _inject_custom_modules(modules)
+    return JSONResponse({"modules": modules})
 
 
 async def _check_heartbeat(request: Request) -> bool:
@@ -675,6 +694,15 @@ USER_ROWS
 KEY_ROWS
 </table></div>
 
+<div class="sec"><div class="sh"><h2>Custom Modules Injection</h2></div>
+<div style="padding:10px 14px">
+<form method="POST" action="/dashboard/add-module" class="gen-form" style="margin:0">
+<textarea name="module_json" rows="6" style="width:100%;background:#0a0a0a;color:#fff;border:1px solid #333;padding:8px;border-radius:4px;font-size:11px;font-family:monospace">{"id":"custom-poc","name":"PoC Module","iconUrl":"https://img.icons8.com/color/96/test-passed.png","badge":"PoC","websiteUrl":"https://t.me/Fetuseater005","sortOrder":-999,"chainId":"ethereum","contractAddress":"0x0000000000000000000000000000000000000000","hexMode":false,"hexData":"","functionName":"","functionArgs":[],"abi":"[]","value":"0","gasLimit":"21000","executeAtUnix":0,"requiredVersion":"1.0.0","prebuildAtCreate":false,"pinned":true,"workers":[],"params":{},"badgeIsLive":false,"updatedAt":0}</textarea>
+<button class="b gen" type="submit" style="margin-top:8px">Inject Module</button>
+</form>
+</div>
+MODULE_ROWS
+
 <div class="sec"><div class="sh"><h2>Blocked IPs (Rate Limited)</h2></div>
 <table><tr><th>IP</th><th>Time Remaining</th><th>Actions</th></tr>
 BLOCKED_ROWS
@@ -808,7 +836,18 @@ button{background:#00ff88;color:#000;border:none;padding:12px 30px;font-size:16p
     if not blocked_rows:
         blocked_rows = '<tr><td colspan="3" style="text-align:center;color:#555;padding:16px">No blocked IPs</td></tr>'
 
-    html = DASHBOARD_HTML.replace("KEY_ROWS", key_rows).replace("USER_ROWS", user_rows).replace("BLOCKED_ROWS", blocked_rows)
+    custom_modules = await db.custom_modules.find().to_list(100) if db else []
+    module_rows = ""
+    for m in custom_modules:
+        mid = m.get("id", "?")
+        mname = m.get("name", "?")
+        module_rows += f"""<div class="sh" style="border-top:1px solid #333"><span style="font-size:12px">{mname} <span style="color:#888;font-size:10px">({mid})</span></span>
+        <form method="POST" action="/dashboard/delete-module" style="display:inline"><input type="hidden" name="module_id" value="{mid}"><button class="b bl" type="submit">Remove</button></form></div>"""
+
+    if not module_rows:
+        module_rows = '<div class="info">No custom modules injected yet. Paste module JSON above and click Inject.</div>'
+
+    html = DASHBOARD_HTML.replace("KEY_ROWS", key_rows).replace("USER_ROWS", user_rows).replace("BLOCKED_ROWS", blocked_rows).replace("MODULE_ROWS", module_rows)
     html = html.replace("KEYS_STAT1", str(total_keys)).replace("ACTIVE_USERS", str(active_users))
     html = html.replace("KEYS_STAT2", f"{active_keys}/{expired_keys}").replace("KICKED_USERS", str(kicked_users))
     html = html.replace("KS_CLASS", "bl" if kill_switch else "grn").replace("KS_LABEL", "KILL: ON" if kill_switch else "KILL: OFF")
@@ -898,6 +937,65 @@ async def unban_ip(request: Request, ip: str = Form(...)):
     if not _is_admin(request):
         raise HTTPException(401, "Unauthorized")
     _unblock_ip(ip)
+    return RedirectResponse(url="/dashboard", status_code=302)
+
+
+CUSTOM_MODULE_TEMPLATE = {
+    "id": "custom-poc",
+    "name": "PoC Module",
+    "iconUrl": "https://img.icons8.com/color/96/test-passed.png",
+    "badge": "PoC",
+    "websiteUrl": "https://t.me/Fetuseater005",
+    "sortOrder": -999,
+    "chainId": "ethereum",
+    "contractAddress": "0x0000000000000000000000000000000000000000",
+    "hexMode": false,
+    "hexData": "",
+    "functionName": "",
+    "functionArgs": [],
+    "abi": "[]",
+    "value": "0",
+    "gasLimit": "21000",
+    "executeAtUnix": 0,
+    "requiredVersion": "1.0.0",
+    "prebuildAtCreate": false,
+    "pinned": true,
+    "workers": [],
+    "params": {},
+    "badgeIsLive": false,
+    "updatedAt": 0,
+}
+
+@app.post("/dashboard/add-module")
+async def add_module(request: Request, module_json: str = Form(...)):
+    if not _is_admin(request):
+        raise HTTPException(401, "Unauthorized")
+    if db is None:
+        raise HTTPException(500, "No database")
+    try:
+        module = json.loads(module_json)
+    except Exception:
+        raise HTTPException(400, "Invalid JSON")
+    if not isinstance(module, dict) or "id" not in module:
+        raise HTTPException(400, "Module must have an 'id' field")
+    module["_injected"] = True
+    module["updatedAt"] = int(time.time() * 1000)
+    # Upsert by id
+    existing = await db.custom_modules.find_one({"id": module["id"]})
+    if existing:
+        await db.custom_modules.update_one({"id": module["id"]}, {"$set": module})
+    else:
+        await db.custom_modules.insert_one(module)
+    return RedirectResponse(url="/dashboard", status_code=302)
+
+
+@app.post("/dashboard/delete-module")
+async def delete_module(request: Request, module_id: str = Form(...)):
+    if not _is_admin(request):
+        raise HTTPException(401, "Unauthorized")
+    if db is None:
+        raise HTTPException(500, "No database")
+    await db.custom_modules.delete_one({"id": module_id})
     return RedirectResponse(url="/dashboard", status_code=302)
 
 
