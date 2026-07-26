@@ -240,8 +240,8 @@ def _get_client_ip(request: Request):
     return request.client.host if request.client else "unknown"
 
 
-def generate_key():
-    return f"ZYPER-{secrets.token_hex(4).upper()}-{secrets.token_hex(4).upper()}-{secrets.token_hex(4).upper()}"
+def generate_key(prefix="ZYPER"):
+    return f"{prefix}-{secrets.token_hex(4).upper()}-{secrets.token_hex(4).upper()}-{secrets.token_hex(4).upper()}"
 
 
 async def _cleanup_loop():
@@ -679,6 +679,10 @@ tr:hover{background:#1a1a1a}
 
 <div class="sec"><div class="sh"><h2>Generate New Key</h2></div>
 <form method="POST" action="/dashboard/generate" class="gen-form">
+<label>Product:</label><select name="product" style="width:100px">
+<option value="ZYPER">Zyper</option>
+<option value="ALPHA">Alpha</option>
+</select>
 <label>Days:</label><input type="number" name="days" value="30" min="1" max="365" style="width:60px">
 <label>Max Devices:</label><input type="number" name="max_devices" value="1" min="1" max="10" style="width:60px">
 <label>Note:</label><input type="text" name="note" placeholder="optional note" style="width:200px">
@@ -694,7 +698,7 @@ USER_ROWS
 </table></div>
 
 <div class="sec"><div class="sh"><h2>All Keys</h2><input class="sbar" id="keySearch" placeholder="Search keys..." oninput="filterTable('keySearch','keyTable')"></div>
-<table id="keyTable"><tr><th>Key</th><th>Status</th><th>Devices</th><th>Expires</th><th>Note</th><th>Created</th><th>Actions</th></tr>
+<table id="keyTable"><tr><th>Key</th><th>Product</th><th>Status</th><th>Devices</th><th>Expires</th><th>Note</th><th>Created</th><th>Actions</th></tr>
 KEY_ROWS
 </table></div>
 
@@ -822,7 +826,9 @@ button{background:#00ff88;color:#000;border:none;padding:12px 30px;font-size:16p
         created = k["created_at"].strftime("%d %b %Y %H:%M") if k.get("created_at") else "-"
         note = k.get("note", "") or "-"
         maxd = k.get("max_devices", 1)
+        product = k.get("product", "ZYPER")
         key_rows += f"""<tr><td class="kc">{k['key']} <button class="b cp" onclick="cp('{k['key']}')">Copy</button></td>
+        <td><span style="color:#ffaa00;font-weight:bold;font-size:10px">{product}</span></td>
         <td><span class="s {status}">{status}</span></td>
         <td>{maxd}</td><td style="font-size:10px">{exp}</td>
         <td style="font-size:10px">{note}</td><td class="ts">{created}</td>
@@ -833,7 +839,7 @@ button{background:#00ff88;color:#000;border:none;padding:12px 30px;font-size:16p
         </td></tr>"""
 
     if not key_rows:
-        key_rows = '<tr><td colspan="7" style="text-align:center;color:#555;padding:16px">No keys generated yet</td></tr>'
+        key_rows = '<tr><td colspan="8" style="text-align:center;color:#555;padding:16px">No keys generated yet</td></tr>'
 
     user_rows = ""
     for s in sessions:
@@ -917,18 +923,20 @@ button{background:#00ff88;color:#000;border:none;padding:12px 30px;font-size:16p
 
 
 @app.post("/dashboard/generate")
-async def generate_keys(request: Request, days: int = Form(30), max_devices: int = Form(1), note: str = Form(""), count: int = Form(1)):
+async def generate_keys(request: Request, days: int = Form(30), max_devices: int = Form(1), note: str = Form(""), count: int = Form(1), product: str = Form("ZYPER")):
     if not _is_admin(request):
         raise HTTPException(401, "Unauthorized")
     if db is None:
         raise HTTPException(500, "No database")
 
+    prefix = product.upper()
     generated = []
     for _ in range(min(count, 20)):
-        key = generate_key()
+        key = generate_key(prefix)
         expires = datetime.utcnow() + timedelta(days=days)
         await db.keys.insert_one({
             "key": key,
+            "product": prefix,
             "max_devices": max_devices,
             "expires_at": expires,
             "note": note,
