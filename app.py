@@ -706,34 +706,37 @@ KEY_ROWS
 </div>
 
 <details>
-<summary style="color:#00ff88;cursor:pointer;font-size:12px;font-weight:bold">+ Create New HTTP Module (for waitlist/whitelist sites)</summary>
+<summary style="color:#00ff88;cursor:pointer;font-size:12px;font-weight:bold">+ Create New HTTP Module</summary>
+<div style="margin:8px 0;padding:8px;background:#0a0a0a;border-radius:4px;font-size:10px;color:#888;line-height:1.5">
+<strong style="color:#ffaa00">How to find API details:</strong><br>
+1. Open website in Chrome → F12 → Network tab<br>
+2. Fill the form on the website and submit<br>
+3. Find the POST request in Network tab → Right-click → Copy → Copy as fetch/cURL<br>
+4. Paste the URL, method, request body, and headers below
+</div>
 <form method="POST" action="/dashboard/add-module-form" class="gen-form" style="margin:8px 0;flex-direction:column;align-items:stretch">
 <div style="display:flex;flex-wrap:wrap;gap:6px">
-<div><label>Module Name</label><input type="text" name="m_name" value="My Waitlist" style="width:150px"></div>
-<div><label>Module ID</label><input type="text" name="m_id" value="my-waitlist" style="width:150px"></div>
+<div><label>Module Name</label><input type="text" name="m_name" value="" placeholder="e.g. Arcadians WL" style="width:180px"></div>
+<div><label>Module ID</label><input type="text" name="m_id" value="" placeholder="e.g. arcadians-wl" style="width:180px"></div>
 <div><label>Badge</label><input type="text" name="m_badge" value="WL" style="width:60px"></div>
-<div><label>Sort Order</label><input type="number" name="m_sort" value="-100" style="width:70px"></div>
 </div>
-<div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:4px">
-<div><label>Website URL</label><input type="text" name="m_website" value="https://example.com/apply" style="width:250px"></div>
-<div><label>Icon URL</label><input type="text" name="m_icon" value="" placeholder="leave empty for default" style="width:250px"></div>
-</div>
-<div style="margin-top:8px;color:#888;font-size:11px">API Request Details:</div>
 <div style="display:flex;flex-wrap:wrap;gap:6px">
-<div><label>API URL (endpoint)</label><input type="text" name="m_api_url" value="https://api.example.com/apply" style="width:350px"></div>
+<div><label>Website URL (page where form is)</label><input type="text" name="m_website" value="" placeholder="https://arcadiansnft.com/apply" style="width:350px"></div>
+</div>
+<div style="display:flex;flex-wrap:wrap;gap:6px">
+<div><label>API URL (from Network tab → POST request URL)</label><input type="text" name="m_api_url" value="" placeholder="https://api.example.com/v1/apply" style="width:450px"></div>
 <div><label>Method</label><select name="m_method" style="background:#0a0a0a;color:#fff;border:1px solid #333;padding:6px;border-radius:4px"><option value="POST">POST</option><option value="GET">GET</option></select></div>
 </div>
-<div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:4px">
-<div><label>Body Template (use {wallet} {email} etc)</label><input type="text" name="m_body" value='{"wallet":"{wallet}"}' style="width:450px"></div>
+<div style="display:flex;flex-wrap:wrap;gap:6px">
+<div><label>Request Body (from Network tab → Request Payload) — use {wallet} for wallet address</label><input type="text" name="m_body" value='{"wallet":"{wallet}"}' placeholder='{"wallet":"{wallet}","email":"test@test.com"}' style="width:500px"></div>
 </div>
-<div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:4px">
-<div><label>Extra Headers (JSON)</label><input type="text" name="m_headers" value='{"Content-Type":"application/json"}' style="width:450px"></div>
+<div style="display:flex;flex-wrap:wrap;gap:6px">
+<div><label>Headers (from Network tab → Request Headers) — copy as JSON</label><input type="text" name="m_headers" value='{"Content-Type":"application/json"}' placeholder='{"Content-Type":"application/json","Authorization":"Bearer ..."}' style="width:500px"></div>
 </div>
-<div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:4px">
-<div><label>Fields (comma-separated keys)</label><input type="text" name="m_fields_keys" value="wallet" placeholder="wallet,email,code" style="width:200px"></div>
-<div><label>Field Kinds</label><select name="m_fields_kind" style="background:#0a0a0a;color:#fff;border:1px solid #333;padding:6px;border-radius:4px"><option value="wallet-address">wallet-address</option><option value="text">text</option><option value="email">email</option></select></div>
-<div><label>Success Codes</label><input type="text" name="m_success" value="200,201" style="width:100px"></div>
+<div style="display:flex;flex-wrap:wrap;gap:6px">
+<div><label>Field keys in body (comma separated — matches {placeholders})</label><input type="text" name="m_fields_keys" value="wallet" placeholder="wallet,email" style="width:250px"></div>
 </div>
+<div style="display:none"><input type="hidden" name="m_icon" value=""><input type="hidden" name="m_sort" value="-100"><input type="hidden" name="m_fields_kind" value="wallet-address"><input type="hidden" name="m_success" value="200,201"></div>
 <button class="b gen" type="submit" style="margin-top:8px;width:200px">Create & Inject Module</button>
 </form>
 </details>
