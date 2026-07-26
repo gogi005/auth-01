@@ -886,7 +886,8 @@ button{background:#00ff88;color:#000;border:none;padding:12px 30px;font-size:16p
     for m in custom_modules:
         mid = m.get("id", "?")
         mname = m.get("name", "?")
-        mjson = __import__("json").dumps(m, indent=2).replace("'", "&#39;").replace(">", "&gt;").replace("<", "&lt;")
+        mc = {k: str(v) if k == "_id" else v for k, v in m.items()}
+        mjson = __import__("json").dumps(mc, indent=2).replace("'", "&#39;").replace(">", "&gt;").replace("<", "&lt;")
         module_rows += f"""<div class="sh" style="border-top:1px solid #333"><span style="font-size:12px">{mname} <span style="color:#888;font-size:10px">({mid})</span></span>
         <div style="display:flex;gap:4px">
         <form method="POST" action="/dashboard/delete-module" style="display:inline"><input type="hidden" name="module_id" value="{mid}"><button class="b bl" type="submit">Remove</button></form>
