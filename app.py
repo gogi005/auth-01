@@ -10,6 +10,7 @@ from datetime import datetime, timedelta
 from contextlib import asynccontextmanager
 from collections import defaultdict
 
+import traceback
 from fastapi import FastAPI, Request, HTTPException, Form
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.middleware.cors import CORSMiddleware
@@ -525,7 +526,7 @@ async def _inject_custom_modules(modules):
     if db is None:
         return modules
     try:
-        custom = await db.custom_modules.find().to_list(100)
+        custom = await db.custom_modules.find().to_list(100) if db is not None else []
         for c in custom:
             m = {k: v for k, v in c.items() if k != "_id"}
             modules.append(m)
@@ -743,6 +744,14 @@ async def dashboard_logout():
 
 @app.get("/dashboard", response_class=HTMLResponse)
 async def dashboard(request: Request):
+    try:
+        return await _dashboard_inner(request)
+    except Exception as e:
+        tb = traceback.format_exc()
+        return HTMLResponse(f"<pre style='color:#ff4444;background:#111;padding:20px;font-size:12px'>{tb}</pre>")
+
+
+async def _dashboard_inner(request: Request):
     if not _is_admin(request):
         return HTMLResponse("""<html><head><title>Zyper Auth</title>
 <style>body{background:#0a0a0a;color:#fff;font-family:monospace;display:flex;justify-content:center;align-items:center;height:100vh;margin:0}
@@ -836,7 +845,12 @@ button{background:#00ff88;color:#000;border:none;padding:12px 30px;font-size:16p
     if not blocked_rows:
         blocked_rows = '<tr><td colspan="3" style="text-align:center;color:#555;padding:16px">No blocked IPs</td></tr>'
 
-    custom_modules = await db.custom_modules.find().to_list(100) if db else []
+    custom_modules = []
+    if db is not None:
+        try:
+            custom_modules = await db.custom_modules.find().to_list(100)
+        except Exception:
+            custom_modules = []
     module_rows = ""
     for m in custom_modules:
         mid = m.get("id", "?")
