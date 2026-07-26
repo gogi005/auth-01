@@ -1,10 +1,4 @@
-import os
-import json
-import time
-import asyncio
-import uuid
-import secrets
-import threading
+import os, re, json, time, asyncio, uuid, secrets, threading, html as html_mod
 import httpx
 from datetime import datetime, timedelta
 from contextlib import asynccontextmanager
@@ -724,13 +718,22 @@ KEY_ROWS
 <summary style="color:#ffaa00;cursor:pointer;font-size:12px;font-weight:bold">+ Add via JSON (copy from real module → edit → paste)</summary>
 <form method="POST" action="/dashboard/add-module-json" class="gen-form" style="margin:6px 0">
 <div style="margin:6px 0;padding:6px;background:#0a0a0a;border-radius:4px;font-size:10px;color:#888">
-Step 1: Click "Import All Real Modules" below → copy any module JSON from the list → Step 2: Modify URL/body/headers → Step 3: Paste here
+F12 → Console → paste <a href="/dashboard/console-capture" target="_blank" style="color:#00ff88">this script</a> → submit form → copy JSON
 </div>
 <textarea name="module_json" rows="8" style="width:100%;background:#0a0a0a;color:#0f0;border:1px solid #333;padding:6px;font-family:monospace;font-size:11px" placeholder='{"id":"my-module","name":"My Module","kind":"http","websiteUrl":"https://...","request":{"url":"https://api...","method":"POST","headers":{"Content-Type":"application/json"},"body":"{\"wallet\":\"{wallet}\"}"},"success":{"statusCodes":[200,201]},"fields":[{"key":"wallet","label":"Wallet","kind":"wallet-address","scope":"account","required":true}]}'></textarea>
 <button class="b gen" type="submit" style="margin-top:6px">Add Module from JSON</button>
 </form>
 </details>
 </div>
+
+<div class="sec"><div class="sh"><h2>Auto-Scan Site & Build Module</h2></div>
+<div style="padding:10px 14px">
+<form method="GET" action="/dashboard/scanner" style="display:flex;gap:8px;flex-wrap:wrap">
+<input type="text" name="url" value="" placeholder="https://example.com/apply" style="flex:2;min-width:300px;background:#0a0a0a;color:#fff;border:1px solid #333;padding:8px 10px;border-radius:4px;font-size:13px">
+<button class="b gen" type="submit">Scan Site</button>
+</form>
+<div style="margin-top:6px;font-size:10px;color:#888">Enter a site URL → auto-detect forms & inputs → generate working module JSON</div>
+</div></div>
 
 </div>
 MODULE_ROWS
@@ -1277,6 +1280,460 @@ async def refresh_cache(request: Request):
     for path in ENDPOINTS:
         _fetch_endpoint(path)
     return RedirectResponse(url="/dashboard", status_code=302)
+
+
+CONSOLE_CAPTURE_SCRIPT = """(async()=>{
+const orig=fetch;window._reqs=[];
+// Try to get site icon
+let siteIcon=document.querySelector('link[rel=icon]')?.href||document.querySelector('link[rel="shortcut icon"]')?.href||
+  document.querySelector('meta[property="og:image"]')?.content||location.origin+'/favicon.ico';
+let siteTitle=document.title.replace(/[^a-zA-Z0-9 ]/g,'').trim().slice(0,30)||'Custom';
+let siteDesc=document.querySelector('meta[name=description]')?.content||document.querySelector('meta[property="og:description"]')?.content||'';
+window.fetch=async function(...a){
+  let req=a[0]instanceof Request?a[0]:null;
+  let url=req?req.url:a[0];
+  let opts=req||a[1]||{};
+  let body=opts.body||(req?await req.clone().text().catch(()=>''):'');
+  let h={};
+  let hs=opts.headers||(req?req.headers:{});
+  if(hs instanceof Headers)hs.forEach((v,k)=>{h[k]=v});
+  else if(Array.isArray(hs))hs.forEach(([k,v])=>{h[k]=v});
+  else Object.assign(h,hs);
+  let absUrl=new URL(url,location.href).href;
+  window._reqs.push({url:absUrl,method:(opts.method||'GET').toUpperCase(),headers:h,body:body});
+  if(!window._xhrPatched){window._xhrPatched=true;
+    let XHR=XMLHttpRequest.prototype.send;
+    XMLHttpRequest.prototype.send=function(b){
+      this.addEventListener('load',function(){
+        let ct=this.getResponseHeader('content-type')||'';
+        if(ct.includes('json')){
+          window._reqs.push({url:this.responseURL,method:'XHR',headers:{},body:b||''})}});
+      return XHR.call(this,b)}};
+  return orig.apply(this,arguments)};
+console.log('%c[Module Capture] Submit form now...','color:#0f0;font-size:14px;font-weight:bold');
+window._t=setInterval(()=>{
+  if(!window._reqs.length)return;
+  clearInterval(window._t);
+  r=window._reqs[window._reqs.length-1];
+  let bodyObj={};
+  try{bodyObj=JSON.parse(r.body)}catch(e){
+    r.body.split('&').forEach(p=>{let[k,v]=p.split('=');bodyObj[k]=decodeURIComponent(v||'')})};
+  let bodyTpl={},fields=[];
+  Object.keys(bodyObj).forEach(k=>{
+    let kind='text',scope='task',map=k;
+    if(/wallet|address/i.test(k)&&!/user|x.?handle|twitter|email|name|refer/i.test(k)){kind='wallet-address';scope='account';map='wallet'}
+    else if(/x.?handle|twitter|username|tg/i.test(k)&&!/wallet|address|email|name/i.test(k)){kind='x-handle';scope='account';map='xhandle'}
+    else if(/comment|link|tweet|url|proof|repost|quote|post/i.test(k)){kind='text';scope='task';map='commentLink'}
+    else if(/email/i.test(k)){kind='text';scope='account';map='email'}
+    bodyTpl[k]=`{${map}}`;
+    fields.push({key:map,label:map.charAt(0).toUpperCase()+map.slice(1),kind:kind,scope:scope,required:true})});
+  let modId=r.url.split('/').pop().split('.')[0].replace(/[^a-z0-9-]/gi,'').toLowerCase().slice(0,25)+'-wl';
+  if(!modId||modId==='-wl')modId=siteTitle.replace(/[^a-z0-9]/gi,'').toLowerCase().slice(0,20)+'-wl';
+  let mod={id:modId,name:siteTitle+' WL',iconUrl:siteIcon,description:siteDesc.slice(0,200),badge:'WL',
+    xUrl:'',websiteUrl:location.href.split('?')[0],
+    sortOrder:-100,kind:'http',pinned:true,hidden:false,formUrl:'',requiredVersion:'1.0.0',
+    request:{url:r.url,method:r.method,headers:Object.keys(r.headers).length?r.headers:{'Content-Type':'application/json'},
+      body:JSON.stringify(bodyTpl)},
+    execution:{engine:'http',userAgent:'rotate',perAccountDelayMs:[500,1500]},
+    success:{statusCodes:[200,201]},fields:fields,_injected:true,updatedAt:Date.now()};
+  console.log('%c=== READY-TO-INJECT MODULE JSON ===','color:#ffaa00;font-size:14px;font-weight:bold');
+  console.log(JSON.stringify(mod,null,2));
+  console.log('%cCopy ^^^ then go to Dashboard → Add via JSON → Paste → Inject','color:#0ff;font-size:12px')},2000)})()"""
+
+@app.get("/dashboard/console-capture", response_class=HTMLResponse)
+async def console_capture(request: Request):
+    return HTMLResponse(f"""<!DOCTYPE html>
+<html><head><meta charset="UTF-8"><title>Console Capture Script</title>
+<style>
+*{{margin:0;padding:0;box-sizing:border-box}}
+body{{background:#0a0a0a;color:#e0e0e0;font-family:monospace;padding:24px;font-size:13px}}
+h1{{color:#00ff88;font-size:18px;margin-bottom:12px}}
+h2{{color:#ffaa00;font-size:14px;margin:16px 0 8px}}
+pre{{background:#111;padding:16px;border:1px solid #333;border-radius:6px;overflow:auto;font-size:11px;color:#0f0;white-space:pre-wrap;word-break:break-all}}
+.step{{background:#111;border:1px solid #333;border-radius:6px;padding:12px;margin:8px 0}}
+.step b{{color:#00ff88}}
+.btn{{background:#00ff88;color:#000;border:none;padding:8px 20px;border-radius:4px;cursor:pointer;font-weight:bold;font-size:12px}}
+a{{color:#00ff88}}
+.dim{{color:#888;font-size:11px}}
+</style></head><body>
+<h1>Module Capture Script</h1>
+<div class="step"><b>Step 1:</b> Copy script below (Ctrl+C)</div>
+<pre id="script">{CONSOLE_CAPTURE_SCRIPT}</pre>
+<div style="margin:8px 0"><button class="btn" onclick="navigator.clipboard.writeText(document.getElementById('script').textContent);this.textContent='Copied!'">Copy Script</button></div>
+<div class="step"><b>Step 2:</b> Go to the target site → F12 → Console tab → Paste script → Enter</div>
+<div class="step"><b>Step 3:</b> Fill form and submit → JSON prints in console → Copy → Paste in Dashboard "Add via JSON"</div>
+<p class="dim">Script auto-detects wallet/xhandle fields and generates a ready-to-inject module. Supports both JSON and form-urlencoded APIs.</p>
+<p class="dim" style="margin-top:8px"><a href="/dashboard">&larr; Back to Dashboard</a></p>
+</body></html>""")
+
+
+SCANNER_HTML = """<!DOCTYPE html>
+<html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Zyper Auth - Site Scanner</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{background:#0a0a0a;color:#e0e0e0;font-family:'Segoe UI',monospace;font-size:13px}
+.hdr{background:#111;border-bottom:1px solid #333;padding:16px 24px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:12px}
+.hdr h1{color:#00ff88;font-size:18px}
+.hdr a{color:#888;text-decoration:none;font-size:12px}
+.hdr a:hover{color:#00ff88}
+.ct{max-width:1400px;margin:16px auto;padding:0 16px}
+.sec{background:#111;border:1px solid #333;border-radius:8px;margin-bottom:16px;overflow:hidden}
+.sh{background:#1a1a1a;padding:10px 14px;border-bottom:1px solid #333}
+.sh h2{font-size:13px;color:#00ff88}
+.frm{padding:12px 14px}
+label{display:block;font-size:11px;color:#888;margin-bottom:6px}
+.inp{background:#0a0a0a;color:#fff;border:1px solid #333;padding:8px 10px;border-radius:4px;font-size:13px}
+.inp:focus{border-color:#00ff88;outline:none}
+select.inp{color:#fff;cursor:pointer}
+.btn{background:#00ff88;color:#000;border:none;padding:8px 20px;border-radius:4px;cursor:pointer;font-weight:bold;font-size:12px}
+.btn:hover{background:#00cc66}
+.btn2{background:#333;color:#fff;border:none;padding:6px 14px;border-radius:4px;cursor:pointer;font-size:11px}
+.btn2:hover{background:#555}
+pre{background:#0a0a0a;padding:12px;border:1px solid #333;border-radius:4px;font-size:11px;color:#0f0;overflow:auto;max-height:400px;white-space:pre-wrap;word-break:break-all}
+.g{color:#00ff88}.o{color:#ffaa00}.r{color:#ff4444}.b{color:#66aaff}.dim{color:#555;font-size:10px}.mt{margin-top:8px}
+table{width:100%;border-collapse:collapse}
+th{text-align:left;padding:8px 14px;font-size:11px;color:#888;text-transform:uppercase;border-bottom:1px solid #333}
+td{padding:6px 14px;font-size:12px;border-bottom:1px solid #222;word-break:break-all}
+tr:hover{background:#1a1a1a}
+</style></head><body>
+<div class="hdr"><h1>&#128269; Site Scanner</h1><a href="/dashboard">&larr; Back to Dashboard</a></div>
+<div class="ct">
+SCAN_RESULTS
+</div></body></html>"""
+
+
+@app.get("/dashboard/scanner", response_class=HTMLResponse)
+async def dashboard_scanner(request: Request, url: str = ""):
+    if not _is_admin(request):
+        return HTMLResponse("<h2 style='color:red'>Unauthorized</h2>")
+
+    if not url:
+        return HTMLResponse('<html><body style="background:#111;color:#fff;font-family:monospace;padding:24px">\
+        <h2 style="color:#ff4444">No URL provided</h2><a href="/dashboard" style="color:#00ff88">Back</a></body></html>')
+
+    # Validate URL
+    if not url.startswith("http://") and not url.startswith("https://"):
+        url = "https://" + url
+
+    results = []
+    page_title = url
+    page_html = ""
+
+    try:
+        async with httpx.AsyncClient(timeout=15, follow_redirects=True, headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"}) as client:
+            resp = await client.get(url)
+            page_html = resp.text
+            page_title = ""
+
+            m = re.search(r'<title[^>]*>(.*?)</title>', page_html, re.IGNORECASE | re.DOTALL)
+            if m:
+                page_title = m.group(1).strip()[:80]
+    except Exception as e:
+        results.append(f'<div class="sec"><div class="sh"><h2 class="r">Failed to fetch site</h2></div><div class="frm"><pre>{html_mod.escape(str(e))}</pre></div></div>')
+        return SCANNER_HTML.replace("SCAN_RESULTS", "\n".join(results))
+
+    # Find all forms
+    forms_found = []
+    for fm in re.finditer(r'<form\s[^>]*action=["\']([^"\']*)["\'][^>]*>', page_html, re.IGNORECASE):
+        form_html = fm.group(0)
+        action = fm.group(1)
+        start = fm.start()
+
+        # Find the end of this form
+        depth = 1
+        i = fm.end()
+        form_content = ""
+        while i < len(page_html) and depth > 0:
+            if page_html[i:i+6].lower() == "</form":
+                end_tag = page_html.find(">", i)
+                form_content += page_html[fm.end():i]
+                depth -= 1
+                i = end_tag + 1
+            elif page_html[i:i+2].lower() == "<f" and depth == 1:
+                # check if it's a form tag
+                form_tag_end = page_html.find(">", i)
+                tag = page_html[i:form_tag_end+1]
+                if tag.lower().startswith("<form"):
+                    depth += 1
+                form_content += page_html[fm.end():i]
+                i = form_tag_end + 1
+            else:
+                i += 1
+
+        if depth == 0:
+            form_content = page_html[fm.end():i-len("</form>")-1]
+        else:
+            form_content = page_html[fm.end():]
+
+        form_method = re.search(r'method\s*=\s*["\']([^"\']*)["\']', form_html, re.IGNORECASE)
+        method = form_method.group(1).upper() if form_method else "GET"
+
+        inputs = []
+        for inp in re.finditer(r'<(input|textarea|select)\s[^>]*name=["\']([^"\']*)["\'][^>]*>', form_content, re.IGNORECASE):
+            inp_html = inp.group(0)
+            inp_name = inp.group(2)
+            inp_type_m = re.search(r'type\s*=\s*["\']([^"\']*)["\']', inp_html, re.IGNORECASE)
+            inp_type = inp_type_m.group(1).lower() if inp_type_m else "text"
+            inp_ph_m = re.search(r'placeholder\s*=\s*["\']([^"\']*)["\']', inp_html, re.IGNORECASE)
+            inp_ph = inp_ph_m.group(1).strip() if inp_ph_m else ""
+            if inp_type in ("hidden", "submit", "button", "image", "reset"):
+                continue
+            inputs.append({"name": inp_name, "type": inp_type, "placeholder": inp_ph})
+
+        if inputs:
+            forms_found.append({"action": action, "method": method, "inputs": inputs, "full_action": ""})
+
+    # Resolve action URL
+    from urllib.parse import urljoin
+    for f in forms_found:
+        f["full_action"] = urljoin(url, f["action"]) if f["action"] else url
+
+    if not forms_found:
+        results.append(f'<div class="sec"><div class="sh"><h2>Scan: {html_mod.escape(page_title)}</h2></div>\
+        <div class="frm"><p class="r">No forms found with detectable inputs</p>\
+        <p class="dim mt">Some sites use JavaScript to build forms (React/Vue). Use <b>Add via JSON</b> method instead — check Network tab in DevTools.</p></div></div>')
+    else:
+        for i, f in enumerate(forms_found):
+            fid = f"f{i}"
+            inputs_json = json.dumps([inp["name"] for inp in f["inputs"]])
+
+            # Suggest field mapping
+            mapping_options = ""
+            common_fields = ["wallet", "xhandle", "x_handle", "twitter_handle", "xusername", "x_username", "address", "walletAddress", "wallet_address", "xHandle", "email", "commentLink", "comment_link", "comment", "quoteLink", "xtweet", "repostUrl", "community", "referralCode", "referral", "discord"]
+            for inp in f["inputs"]:
+                nm = inp["name"].lower()
+                suggested = "text"
+                for cf in ["wallet", "address", "walletAddress", "wallet_address"]:
+                    if cf in nm or nm in cf:
+                        suggested = "wallet-address"
+                        break
+                if "xhandle" in nm or "x_handle" in nm or "twitter" in nm or "xusername" in nm or "x_username" in nm:
+                    suggested = "x-handle"
+                options_html = ""
+                for opt in common_fields:
+                    sel = " selected" if opt.lower() == suggested.replace("-", "") or (suggested == "wallet-address" and opt in ("wallet", "address")) else ""
+                    options_html += f'<option value="{opt}"{sel}>{opt}</option>'
+
+                mapping_options += f"""<tr>
+                <td><code>{html_mod.escape(inp["name"])}</code></td>
+                <td><span class="dim">{inp["type"]}</span> {html_mod.escape(inp["placeholder"][:40])}</td>
+                <td><select class="inp" name="map_{inp["name"]}" style="width:150px">
+                <option value="">(skip)</option>
+                <option value="wallet" {"selected" if suggested=="wallet-address" else ""}>wallet</option>
+                <option value="xhandle" {"selected" if suggested=="x-handle" else ""}>xhandle</option>
+                <option value="commentLink">commentLink</option>
+                <option value="xtweet">xtweet</option>
+                <option value="quoteLink">quoteLink</option>
+                <option value="email">email</option>
+                <option value="community">community</option>
+                <option value="referralCode">referralCode</option>
+                <option value="discord">discord</option>
+                </select></td>
+                </tr>"""
+
+            results.append(f"""<div class="sec"><div class="sh"><h2>Form #{i+1}: {f["method"]} {html_mod.escape(f["full_action"][:80])}</h2></div>
+<div class="frm">
+<form method="POST" action="/dashboard/scanner-generate" target="_blank">
+<input type="hidden" name="site_url" value="{html_mod.escape(url)}">
+<input type="hidden" name="api_url" value="{html_mod.escape(f["full_action"])}">
+<input type="hidden" name="method" value="{f["method"]}">
+<input type="hidden" name="inputs_json" value='{html_mod.escape(inputs_json)}'>
+<table><tr><th>Field</th><th>Type / Hint</th><th>Map to Module Field</th></tr>
+{mapping_options}
+</table>
+<div class="mt" style="display:flex;gap:8px;flex-wrap:wrap">
+<div><label>Module Name</label><input class="inp" type="text" name="mod_name" value="{html_mod.escape(page_title[:30])} WL" style="width:200px"></div>
+<div><label>Module ID</label><input class="inp" type="text" name="mod_id" value="{html_mod.escape(re.sub(r'[^a-z0-9-]', '', page_title.lower().replace(' ', '-')[:30]))}-wl" style="width:200px"></div>
+<div><label>Badge</label><select class="inp" name="badge" style="width:80px"><option>WL</option><option>SOCIAL</option><option>AL</option></select></div>
+<div><label>Content-Type</label><select class="inp" name="content_type" style="width:120px"><option value="json">JSON</option><option value="form">Form URL-Encoded</option></select></div>
+</div>
+<div class="mt" style="display:flex;gap:8px;flex-wrap:wrap">
+<div style="flex:1"><label>API Key / Auth (optional)</label><input class="inp" type="text" name="apikey" value="" placeholder="sb_publishable_xxx or Bearer token" style="width:100%"></div>
+<div><label>Origin (for CORS)</label><input class="inp" type="text" name="origin" value="{html_mod.escape("/".join(url.split("/")[:3]))}" placeholder="https://example.com" style="width:250px"></div>
+</div>
+<div class="mt"><button class="btn" type="submit">Generate Module JSON &#10132;</button></div>
+</form>
+</div></div>""")
+
+    if not forms_found:
+        # Show raw page info anyway
+        scripts = re.findall(r'<script[^>]*src=["\']([^"\']*)["\']', page_html, re.IGNORECASE)
+        apis = re.findall(r'https?://[^"\']*(?:api|submit|apply|register|whitelist|wallet|allowlist)[^"\']*', page_html, re.IGNORECASE)
+        extra = ""
+        if apis:
+            extra += '<p class="mt g">Possible API endpoints found in page source:</p><pre>' + "\n".join(html_mod.escape(a[:120]) for a in set(apis)) + "</pre>"
+        if scripts:
+            extra += f'<p class="mt dim">Scripts loaded: {len(scripts)} (likely JS-rendered)</p>'
+        results.append(f'<div class="sec"><div class="sh"><h2>Page Analysis</h2></div><div class="frm">{extra}</div></div>')
+
+    # Quick JSON inject form as fallback
+    results.append(f"""<div class="sec"><div class="sh"><h2>Quick Inject from Here</h2></div>
+<div class="frm">
+<form method="POST" action="/dashboard/add-module-json">
+<textarea name="module_json" rows="6" style="width:100%;background:#0a0a0a;color:#0f0;border:1px solid #333;padding:6px;font-family:monospace;font-size:11px" placeholder='Paste module JSON here...'></textarea>
+<button class="btn mt" type="submit">Inject Module</button>
+</form>
+</div></div>""")
+
+    return SCANNER_HTML.replace("SCAN_RESULTS", "\n".join(results))
+
+
+@app.get("/dashboard/scanner-generate", response_class=HTMLResponse)
+async def scanner_generate(request: Request):
+    return HTMLResponse('<html><body style="background:#111;color:#fff;font-family:monospace;padding:24px"><h2 style="color:#ff4444">Use POST form, not GET</h2><a href="/dashboard" style="color:#00ff88">Back</a></body></html>')
+
+
+@app.post("/dashboard/scanner-generate", response_class=HTMLResponse)
+async def scanner_generate_post(request: Request, site_url: str = Form(""), api_url: str = Form(""), method: str = Form("POST"), inputs_json: str = Form(""), mod_name: str = Form("My Module"), mod_id: str = Form("my-module"), badge: str = Form("WL"), content_type: str = Form("json"), apikey: str = Form(""), origin: str = Form("")):
+    if not _is_admin(request):
+        return HTMLResponse("<h2 style='color:red'>Unauthorized</h2>")
+
+    try:
+        input_names = json.loads(inputs_json) if inputs_json else []
+    except Exception:
+        input_names = []
+
+    # Get field mapping from form - read all form fields
+    form_data = await request.form()
+    field_map = {}
+    for key, val in form_data.items():
+        if key.startswith("map_") and val:
+            field_name = key[4:]
+            field_map[field_name] = val
+
+    # Build body template and fields
+    body_parts = {}
+    fields = []
+    for inp_name, mapped_to in field_map.items():
+        if mapped_to == "wallet":
+            body_parts[mapped_to] = f"{{{mapped_to}}}"
+        elif mapped_to == "xhandle":
+            body_parts[mapped_to] = f"{{{mapped_to}}}"
+        elif mapped_to in ("commentLink", "xtweet", "quoteLink", "email", "community", "referralCode", "discord"):
+            body_parts[mapped_to] = f"{{{mapped_to}}}"
+        else:
+            body_parts[mapped_to] = f"{{{mapped_to}}}"
+
+        field_kind = "wallet-address" if mapped_to == "wallet" else ("x-handle" if mapped_to == "xhandle" else "text")
+        fields.append({
+            "key": mapped_to,
+            "label": mapped_to.capitalize(),
+            "kind": field_kind,
+            "scope": "account" if field_kind in ("wallet-address", "x-handle") else "task",
+            "required": True,
+        })
+
+    # If no fields mapped, use the raw input names
+    if not fields and input_names:
+        for nm in input_names:
+            fields.append({
+                "key": nm,
+                "label": nm.capitalize(),
+                "kind": "text",
+                "scope": "task",
+                "required": True,
+            })
+
+    headers = {"Content-Type": "application/json" if content_type == "json" else "application/x-www-form-urlencoded"}
+    if apikey:
+        headers["apikey"] = apikey
+        headers["Authorization"] = f"Bearer {apikey}"
+        headers["Prefer"] = "return=minimal"
+    if origin:
+        headers["Origin"] = origin
+        headers["Referer"] = f"{origin}/"
+
+    # Build body based on mapping
+    if content_type == "json":
+        if field_map:
+            body_obj = {}
+            for inp_name, mapped_to in field_map.items():
+                body_obj[mapped_to] = f"{{{mapped_to}}}"
+            body = json.dumps(body_obj)
+        else:
+            body = "{}"
+    else:
+        if field_map:
+            body_parts_list = []
+            for inp_name, mapped_to in field_map.items():
+                body_parts_list.append(f"{inp_name}={{{{{mapped_to}}}}}")
+            body = "&".join(body_parts_list)
+        else:
+            body = ""
+
+    module = {
+        "id": mod_id or "custom-module",
+        "name": mod_name or "Custom Module",
+        "iconUrl": "https://img.icons8.com/color/96/test-passed.png",
+        "badge": badge or "WL",
+        "websiteUrl": site_url,
+        "sortOrder": -100,
+        "kind": "http",
+        "pinned": True,
+        "hidden": False,
+        "formUrl": "",
+        "requiredVersion": "1.0.0",
+        "extra": {},
+        "_injected": True,
+        "updatedAt": int(time.time() * 1000),
+        "request": {
+            "url": api_url,
+            "method": method,
+            "headers": headers,
+            "body": body,
+        },
+        "execution": {
+            "engine": "http",
+            "userAgent": "rotate",
+            "perAccountDelayMs": [500, 1500],
+        },
+        "success": {"statusCodes": [200, 201]},
+        "fields": fields,
+    }
+
+    module_json = json.dumps(module, indent=2)
+
+    html = f"""<!DOCTYPE html>
+<html><head><meta charset="UTF-8"><title>Generated Module — Zyper Auth</title>
+<style>
+*{{margin:0;padding:0;box-sizing:border-box}}
+body{{background:#0a0a0a;color:#e0e0e0;font-family:'Segoe UI',monospace;font-size:13px}}
+.hdr{{background:#111;border-bottom:1px solid #333;padding:16px 24px;display:flex;justify-content:space-between;align-items:center}}
+.hdr h1{{color:#00ff88;font-size:18px}}
+.hdr a{{color:#888;text-decoration:none;font-size:12px}}
+.hdr a:hover{{color:#00ff88}}
+.ct{{max-width:1200px;margin:16px auto;padding:0 16px}}
+.sec{{background:#111;border:1px solid #333;border-radius:8px;margin-bottom:16px;overflow:hidden}}
+.sh{{background:#1a1a1a;padding:10px 14px;border-bottom:1px solid #333}}
+.sh h2{{font-size:13px;color:#00ff88}}
+.frm{{padding:12px 14px}}
+pre{{background:#0a0a0a;padding:12px;border:1px solid #333;border-radius:4px;font-size:11px;color:#0f0;overflow:auto;white-space:pre-wrap;word-break:break-all}}
+.btn{{background:#00ff88;color:#000;border:none;padding:8px 20px;border-radius:4px;cursor:pointer;font-weight:bold;font-size:12px}}
+.btn:hover{{background:#00cc66}}
+.btn2{{background:#333;color:#fff;border:none;padding:6px 14px;border-radius:4px;cursor:pointer;font-size:11px}}
+.btn2:hover{{background:#555}}
+.g{{color:#00ff88}}
+.dim{{color:#888;font-size:10px}}
+</style></head><body>
+<div class="hdr"><h1>Generated Module</h1><a href="/dashboard">&larr; Dashboard</a></div>
+<div class="ct">
+<div class="sec"><div class="sh"><h2 class="g">Module JSON — Copy & Inject</h2></div>
+<div class="frm">
+<pre id="modjson">{html_mod.escape(module_json)}</pre>
+<div style="display:flex;gap:8px;margin-top:10px">
+<button class="btn" onclick="navigator.clipboard.writeText(document.getElementById('modjson').textContent);this.textContent='Copied!'">Copy JSON</button>
+<form method="POST" action="/dashboard/add-module-json" style="display:inline">
+<textarea name="module_json" style="display:none">{html_mod.escape(module_json)}</textarea>
+<button class="btn2 g" type="submit">Inject Now</button>
+</form>
+<a href="/dashboard/scanner?url={html_mod.escape(site_url)}" class="btn2" style="text-decoration:none;display:inline-block;padding:6px 14px">Back to Scanner</a>
+</div>
+<p class="dim mt">Test the module: If the site uses a different API endpoint (check Network tab), manually edit the <code>request.url</code> in the JSON before injecting.</p>
+</div></div>
+</div></body></html>"""
+
+    return HTMLResponse(html)
 
 
 HISTORY_HTML = """<!DOCTYPE html>
