@@ -949,7 +949,7 @@ CUSTOM_MODULE_TEMPLATE = {
     "sortOrder": -999,
     "chainId": "ethereum",
     "contractAddress": "0x0000000000000000000000000000000000000000",
-    "hexMode": false,
+    "hexMode": False,
     "hexData": "",
     "functionName": "",
     "functionArgs": [],
@@ -958,11 +958,11 @@ CUSTOM_MODULE_TEMPLATE = {
     "gasLimit": "21000",
     "executeAtUnix": 0,
     "requiredVersion": "1.0.0",
-    "prebuildAtCreate": false,
-    "pinned": true,
+    "prebuildAtCreate": False,
+    "pinned": True,
     "workers": [],
     "params": {},
-    "badgeIsLive": false,
+    "badgeIsLive": False,
     "updatedAt": 0,
 }
 
